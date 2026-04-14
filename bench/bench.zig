@@ -22,10 +22,11 @@ extern fn zig_matrix_multiply(
 pub fn main() !void {
     const allocator = std.heap.page_allocator;
     
-    // Test matrices: 100x50 * 50x100
-    const m: usize = 100;
-    const n: usize = 50;
-    const p: usize = 100;
+    // Test matrices: 1000x500  * 500x1000
+    const m: usize = 1024; //was 100
+    const n: usize = 1024; // was 50
+    const p: usize = 1024; //was 100
+    // That's ~2.1 billion operations! Should take ~50-200ms
     
     const a = try allocator.alloc(f32, m * n);
     const b = try allocator.alloc(f32, n * p);
