@@ -4,10 +4,13 @@ version = "0.1.0"
 edition = "2021"
 
 [lib]
-crate-type = ["cdylib", "staticlib"]
+crate-type = ["staticlib"]
+name = "matrix_rs"
 
 [profile.release]
 opt-level = 3
-lto = "fat"          # Enable link-time optimization
-codegen-units = 1    # Single codegen unit for better optimization
-panic = "abort"      # Smaller binary, no panic unwinding
+lto = "fat"          # Maximum Link-Time Optimization
+codegen-units = 1    # Allow global cross-function optimization
+panic = "abort"      # Eliminate stack unwinding overhead
+overflow-checks = false # Disable integer overflow checks for performance
+incremental = false  # Maximize optimization over build speed
