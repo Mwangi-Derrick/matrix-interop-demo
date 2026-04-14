@@ -24,3 +24,5 @@ Cargo.lock
 # OS
 .DS_Store
 Thumbs.db.zig-cache/
+
+*_results.md*
