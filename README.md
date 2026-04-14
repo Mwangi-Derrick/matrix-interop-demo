@@ -1,84 +1,59 @@
-# Matrix-Lib: Systems-Level Interop & Performance Benchmark
+# Matrix-Lib: Systems-Level Interop & Performance Analysis
 
-A raw, polyglot exploration of modern systems programming, pushing **Zig**, **Rust**, and **C++** to their limits in a unified performance harness.
+An empirical exploration of modern systems programming, evaluating how **Zig**, **Rust**, and **C++** optimize high-compute workloads in a unified, multi-language build environment.
 
 ```text
     [ Infrastructure Layer ]
            |
     +------+------+------+
     |      |      |      |
-  [Zig]  [Rust] [C++]  (Core Engines)
+  [Zig]  [Rust] [C++]  (O(n³) Kernels)
     |      |      |
     +------+------+
            |
     [ Unified Build System (Zig) ]
-           |
-    +------+------+------+
-    |      |      |      |
- [Python] [Go]  [TS]   (Consumers)
 ```
 
-## The Manifesto
-In the world of high-performance infrastructure, language choice is a tactical decision. This project proves that we can harness the unique strengths of the three most powerful systems languages without sacrificing interoperability.
-
-We use **Zig 0.15.2** not just as a language, but as a **next-generation build orchestrator** that treats C++ and Rust as first-class citizens.
+## Abstract
+This project analyzes the performance of naive $O(n^3)$ matrix multiplication across three LLVM-backed toolchains. This research demonstrates that "language speed" is often a proxy for toolchain configuration, specifically regarding SIMD vectorization and floating-point reordering.
 
 ---
 
-## Performance Ratios: 1024x1024 Matrix Multiplication
+## Comparative Performance: 1024x1024 Workload
 Benchmarks performed on **x86_64-windows-gnu** (MSYS2/MinGW). Total operations: ~2.1 Billion FLOPs.
 
-| Implementation | Execution Time | Performance | Notes |
+| Implementation | Execution Time | Performance Delta | Notes |
 | :--- | :--- | :--- | :--- |
-| **Zig** | **10,414 ms** | **1.00x (Baseline)** | 🏆 Ultra-efficient autovectorization. |
-| **C++** | **12,820 ms** | **1.23x slower** | Standard O3 optimizations with g++. |
-| **Rust** | **12,826 ms** | **1.23x slower** | LTO enabled, no_mangle C-exports. |
+| **C++** | **10,671 ms** | **1.00x (Baseline)** | 🏆 Leader with `-ffast-math -march=native`. |
+| **Rust** | **12,685 ms** | **1.19x** | Stable with LTO and `target-cpu=native`. |
+| **Zig** | **13,466 ms** | **1.26x** | High variance depending on `-Dtarget` detection. |
 
-### Why is Zig winning?
-*   **Aliasing Semantics**: Zig's pointer model gives LLVM more aggressive optimization room than standard C++ or Rust's safe-slice abstractions.
-*   **Comptime Specialization**: Zero-overhead generic dispatch.
-*   **No Hidden Runtime**: Unlike many modern languages, Zig provides absolute transparency between source and machine code.
+### Performance Analysis: The "Standardization Flip"
+Earlier iterations showed Zig in the lead, but rigorous standardization of C++ flags (`-ffast-math`) allowed `g++` to reclaim the performance crown.
 
----
-
-## Interoperability: The "Zero-Overhead" Bridge
-Every implementation adheres to the **C ABI**, ensuring zero-copy, zero-overhead calls between components.
-
-### 1. The Rust Static Engine
-We compile Rust to a `staticlib` with `lto = "fat"` and `panic = "abort"` for the smallest, fastest possible binary footprint.
-```bash
-cargo build --release --target x86_64-pc-windows-gnu
-```
-
-### 2. The C++ Legacy Wrapper
-Using standard `extern "C"` to bridge C++'s class-based logic into the global linker namespace.
-
-### 3. The Zig Orchestrator
-Zig acts as the "Glue Code" and the Build System. It handles the linking of complex Windows system libraries (`userenv`, `ntdll`, `shell32`) and manages the C++ include paths.
+1.  **The `-ffast-math` Impact**: C++'s lead is largely attributed to aggressive floating-point optimizations that allow the compiler to ignore strict IEEE 754 compliance in favor of SIMD throughput.
+2.  **Toolchain Heuristics**: Zig's regression when moving to an explicit `native` target suggests that the internal LLVM heuristics for CPU detection can significantly sway results in tight arithmetic loops.
+3.  **The "Safety" Tax**: Rust's consistent 12s performance shows the plateau of safe-but-optimized code. Even with bounds-check elision, the abstraction layer provides a highly predictable, if not "bleeding edge," execution time.
 
 ---
 
-## Real-World Production Integration
-This library isn't meant for a terminal; it's meant to be the heart of a high-throughput system:
-
-*   **Financial Trading (Python)**: Use `cffi` to call this library for nanosecond-sensitive risk calculations while keeping the strategy logic in Python.
-*   **Cloud Infrastructure (Go)**: Use `cgo` to offload CPU-intensive matrix math from Go's garbage-collected heap into the raw memory managed by our Zig engine.
-*   **Real-time Visualization (TS/Node)**: Process massive datasets in a background thread via `node-ffi-napi` without blocking the V8 event loop.
+## Technical Insights
+*   **Vectorization**: The delta between 10s and 13s is almost entirely due to how effectively the compiler unrolls the inner `k` loop and utilizes YMM/ZMM registers.
+*   **Aliasing**: C++ with `-O3` and Zig both benefit from aggressive pointer analysis, while Rust relies on its unique borrow-checker-driven aliasing information.
 
 ---
 
-## Build & Verify
+## Build & Run
 ```bash
 # 1. Prepare the Rust Engine
-cd rust && cargo build --release --target x86_64-pc-windows-gnu && cd ..
+cd rust && RUSTFLAGS="-C target-cpu=native" cargo build --release --target x86_64-pc-windows-gnu && cd ..
 
 # 2. Run the High-Performance Harness
-zig build run -Doptimize=ReleaseFast
+zig build clean
+zig build run -Doptimize=ReleaseFast -Dtarget=native
 ```
 
 ---
 
-## Architectural Insights
-*   **Binary Size**: We prioritize LTO (Link Time Optimization) to strip unused symbols from the Rust standard library.
-*   **Linking Logic**: We manually resolve `GetUserProfileDirectoryW` and other OS-level symbols in the Zig build script, demonstrating deep integration with the Windows environment.
-*   **Memory Safety**: We balance Rust's safety with Zig's manual precision, ensuring no leaks in the high-performance path.
+## Conclusion
+Systems engineering is the art of **configuration**. This project proves that the choice between Zig, Rust, and C++ should be based on **developer ergonomics and safety models**, as the raw performance can be equalized or flipped through expert-level toolchain tuning.
