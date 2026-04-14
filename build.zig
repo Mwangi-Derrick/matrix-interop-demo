@@ -62,6 +62,8 @@ pub fn build(b: *std.Build) void {
         bench.linkSystemLibrary("ws2_32");
         bench.linkSystemLibrary("advapi32");
         bench.linkSystemLibrary("ntdll");
+        bench.linkSystemLibrary("userenv");  // (provides GetUserProfileDirectoryW)
+        bench.linkSystemLibrary("shell32");  // (often needed with userenv)
     }
 
     // Link libc
