@@ -1,3 +1,4 @@
+// build.zig
 const std = @import("std");
 
 pub fn build(b: *std.Build) void {
@@ -14,19 +15,18 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
-    // Link C++ implementation with g++
+    // Link C++ implementation with rigorous optimization flags
     bench.addCSourceFiles(.{
         .files = &.{"cpp/matrix.cpp"},
         .flags = &.{
-        "-std=c++17",
-        "-I/usr/include",  // Unix-like systems
-        // For MSYS2/MinGW on Windows:
-        "-IC:/msys64/usr/include",
+            "-std=c++17",
+            "-O3",
+            "-march=native",
+            "-ffast-math",
+            "-funroll-loops",
         },
     });
     bench.addIncludePath(b.path("cpp"));
-    
-    // Link with g++ standard library
     bench.linkSystemLibrary("stdc++");
 
     // Compile and link Zig implementation
@@ -40,35 +40,22 @@ pub fn build(b: *std.Build) void {
     });
     bench.addObject(zig_obj);
 
-    // Link Rust static library - use runtime check instead of comptime switch
-    const rust_lib_path = blk: {
-        const os_tag = target.result.os.tag;
-        if (os_tag == .windows) {
-            break :blk "rust/target/x86_64-pc-windows-gnu/release/libmatrix_rs.a";
-        } else if (os_tag == .linux) {
-            break :blk "rust/target/x86_64-unknown-linux-gnu/release/libmatrix_rs.a";
-        } else if (os_tag == .macos) {
-            break :blk "rust/target/x86_64-apple-darwin/release/libmatrix_rs.a";
-        } else {
-            @panic("Unsupported OS");
-        }
-    };
+    // Link Rust static library
+    const rust_lib_path = "rust/target/x86_64-pc-windows-gnu/release/libmatrix_rs.a";
     bench.addObjectFile(b.path(rust_lib_path));
 
-    // Windows-specific libraries
+    // Windows-specific libraries for Rust/C++ interop
     if (target.result.os.tag == .windows) {
         bench.linkSystemLibrary("user32");
         bench.linkSystemLibrary("kernel32");
         bench.linkSystemLibrary("ws2_32");
         bench.linkSystemLibrary("advapi32");
         bench.linkSystemLibrary("ntdll");
-        bench.linkSystemLibrary("userenv");  // (provides GetUserProfileDirectoryW)
-        bench.linkSystemLibrary("shell32");  // (often needed with userenv)
+        bench.linkSystemLibrary("userenv");
+        bench.linkSystemLibrary("shell32");
     }
 
-    // Link libc
     bench.linkLibC();
-
     b.installArtifact(bench);
 
     const run_cmd = b.addRunArtifact(bench);
@@ -76,4 +63,15 @@ pub fn build(b: *std.Build) void {
 
     const run_step = b.step("run", "Run the benchmark");
     run_step.dependOn(&run_cmd.step);
+
+    // Manual 'clean' step - Corrected for Zig 0.15.2
+    const clean_step = b.step("clean", "Remove build artifacts");
+    clean_step.makeFn = struct {
+        fn make(_: *std.Build.Step, _: std.Build.Step.MakeOptions) anyerror!void {
+            const path = ".zig-cache";
+            const path2 = "zig-out";
+            std.fs.cwd().deleteTree(path) catch {};
+            std.fs.cwd().deleteTree(path2) catch {};
+        }
+    }.make;
 }
