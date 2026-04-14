@@ -3,6 +3,7 @@ const std = @import("std");
 
 // Import all three libraries
 const c = @cImport({
+    @cInclude("stddef.h"); // For size_t
     @cInclude("matrix.h");  // C++ wrapper
 });
 
