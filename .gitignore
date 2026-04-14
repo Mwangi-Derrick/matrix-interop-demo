@@ -3,7 +3,7 @@
 zig-out/
 
 # Rust
-/target/
+target/
 Cargo.lock
 
 # C++
