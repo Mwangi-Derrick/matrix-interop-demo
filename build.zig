@@ -17,7 +17,12 @@ pub fn build(b: *std.Build) void {
     // Link C++ implementation with g++
     bench.addCSourceFiles(.{
         .files = &.{"cpp/matrix.cpp"},
-        .flags = &.{"-std=c++17"},
+        .flags = &.{
+        "-std=c++17",
+        "-I/usr/include",  // Unix-like systems
+        // For MSYS2/MinGW on Windows:
+        "-IC:/msys64/usr/include",
+        },
     });
     bench.addIncludePath(b.path("cpp"));
     
