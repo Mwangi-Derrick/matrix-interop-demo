@@ -1,4 +1,3 @@
-// build.zig
 const std = @import("std");
 
 pub fn build(b: *std.Build) void {
@@ -15,15 +14,17 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
-    // Link C++ implementation
+    // Link C++ implementation with g++
     bench.addCSourceFiles(.{
         .files = &.{"cpp/matrix.cpp"},
         .flags = &.{"-std=c++17"},
     });
     bench.addIncludePath(b.path("cpp"));
-    bench.linkLibCpp();
+    
+    // Link with g++ standard library
+    bench.linkSystemLibrary("stdc++");
 
-    // Compile and link Zig implementation (it exports zig_matrix_multiply)
+    // Compile and link Zig implementation
     const zig_obj = b.addObject(.{
         .name = "zig_matrix",
         .root_module = b.createModule(.{
@@ -34,17 +35,25 @@ pub fn build(b: *std.Build) void {
     });
     bench.addObject(zig_obj);
 
-    // Link Rust static lib (GNU target)
-    bench.addObjectFile(b.path("rust/target/x86_64-pc-windows-gnu/release/libmatrix_rs.a"));
+    // Link Rust static library
+    const rust_lib_path = switch (target.result.os.tag) {
+        .windows => "rust/target/x86_64-pc-windows-gnu/release/libmatrix_rs.a",
+        .linux => "rust/target/x86_64-unknown-linux-gnu/release/libmatrix_rs.a",
+        .macos => "rust/target/x86_64-apple-darwin/release/libmatrix_rs.a",
+        else => @compileError("Unsupported OS"),
+    };
+    bench.addObjectFile(b.path(rust_lib_path));
 
-    // On Windows GNU, we often need to link these for Rust/C++ interop
-    bench.linkSystemLibrary("user32");
-    bench.linkSystemLibrary("kernel32");
-    bench.linkSystemLibrary("ws2_32");
-    bench.linkSystemLibrary("advapi32");
-    bench.linkSystemLibrary("ntdll");
+    // Windows-specific libraries (only if needed for Rust/C++ interop)
+    if (target.result.os.tag == .windows) {
+        bench.linkSystemLibrary("user32");
+        bench.linkSystemLibrary("kernel32");
+        bench.linkSystemLibrary("ws2_32");
+        bench.linkSystemLibrary("advapi32");
+        bench.linkSystemLibrary("ntdll");
+    }
 
-    // Link libc for interop
+    // Link libc
     bench.linkLibC();
 
     b.installArtifact(bench);
