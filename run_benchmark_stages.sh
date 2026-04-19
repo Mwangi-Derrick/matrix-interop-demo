@@ -34,6 +34,10 @@ detect_host() {
             RUST_TARGET="x86_64-unknown-linux-gnu"
             CXX_RUNTIME="stdc++"
             ;;
+        MINGW64_NT-*:x86_64|MSYS_NT-*:x86_64|CYGWIN_NT-*:x86_64)
+            RUST_TARGET="x86_64-pc-windows-gnu"
+            CXX_RUNTIME="stdc++"
+            ;;
         *)
             printf 'unsupported host: %s:%s\n' "$(uname -s)" "$(uname -m)" >&2
             exit 1
