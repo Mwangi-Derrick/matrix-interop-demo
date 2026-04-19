@@ -1,5 +1,3 @@
-const std = @import("std");
-
 export fn zig_matrix_multiply(
     a_ptr: [*]const f32,
     a_rows: usize,
@@ -14,19 +12,19 @@ export fn zig_matrix_multiply(
     const n = a_cols;
     const p = b_cols;
 
-    @memset(result_ptr[0 .. m * p], 0);
-
     for (0..m) |i| {
         const a_row = a_ptr + i * n;
         const result_row = result_ptr + i * p;
 
-        for (0..n) |k| {
-            const a_val = a_row[k];
-            const b_row = b_ptr + k * p;
-
-            for (0..p) |j| {
-                result_row[j] += a_val * b_row[j];
+        for (0..p) |j| {
+            var sum: f32 = 0.0;
+            var k: usize = 0;
+            var b_at = b_ptr + j;
+            while (k < n) : (k += 1) {
+                sum += a_row[k] * b_at[0];
+                b_at += p;
             }
+            result_row[j] = sum;
         }
     }
 }
