@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/matrix-stages.XXXXXX")"
 KEEP_WORKTREES="${KEEP_WORKTREES:-0}"
+USE_CURRENT_ZIG_ALL_STAGES="${USE_CURRENT_ZIG_ALL_STAGES:-0}"
 
 declare -a WORKTREES=()
 
@@ -43,9 +44,11 @@ cleanup() {
     local exit_code=$?
 
     if [[ "$KEEP_WORKTREES" != "1" ]]; then
-        for worktree in "${WORKTREES[@]}"; do
-            git -C "$ROOT_DIR" worktree remove --force "$worktree" >/dev/null 2>&1 || true
-        done
+        if ((${#WORKTREES[@]} > 0)); then
+            for worktree in "${WORKTREES[@]}"; do
+                git -C "$ROOT_DIR" worktree remove --force "$worktree" >/dev/null 2>&1 || true
+            done
+        fi
         rm -rf "$TMP_ROOT"
     else
         printf 'kept worktrees in %s\n' "$TMP_ROOT" >&2
@@ -88,6 +91,11 @@ prepare_rust_crate_root() {
     cp "$ROOT_DIR/rust/src/lib.rs" "$dir/rust/src/lib.rs"
 }
 
+prepare_current_zig_kernel() {
+    local dir="$1"
+    cp "$ROOT_DIR/zig/matrix.zig" "$dir/zig/matrix.zig"
+}
+
 build_rust() {
     local dir="$1"
     local rustflags="$2"
@@ -122,7 +130,11 @@ run_stage() {
     shift 3
 
     local dir
-    printf '\n=== %s (%s) ===\n' "$label" "$commit"
+    if [[ "$USE_CURRENT_ZIG_ALL_STAGES" == "1" ]]; then
+        printf '\n=== %s (%s) [current-zig] ===\n' "$label" "$commit"
+    else
+        printf '\n=== %s (%s) ===\n' "$label" "$commit"
+    fi
     dir="$(add_worktree "$label" "$commit")"
 
     if [[ "$label" == "stage1" ]]; then
@@ -132,6 +144,9 @@ run_stage() {
     fi
 
     prepare_rust_crate_root "$dir"
+    if [[ "$USE_CURRENT_ZIG_ALL_STAGES" == "1" ]]; then
+        prepare_current_zig_kernel "$dir"
+    fi
     build_rust "$dir" "$rustflags"
     run_zig "$dir" "$@"
 }
@@ -155,6 +170,9 @@ main() {
     detect_host
 
     printf 'Host target: %s\n' "$RUST_TARGET"
+    if [[ "$USE_CURRENT_ZIG_ALL_STAGES" == "1" ]]; then
+        printf 'Using current zig/matrix.zig for historical stages\n'
+    fi
     rustup target add "$RUST_TARGET"
 
     run_stage stage1 f81426b "" -Doptimize=ReleaseFast
