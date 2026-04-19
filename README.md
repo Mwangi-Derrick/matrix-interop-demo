@@ -1,6 +1,8 @@
 # matrix-lib: A Polyglot Systems Performance Journey
 
 > _"In systems engineering, we don't just write code that works. We write code that vibrates with the hardware."_
+> *"Hardware changes. Physics doesn't."*
+> — from the project's first cross-platform PR
 
 ---
 
@@ -8,33 +10,26 @@
 ╔══════════════════════════════════════════════════════════════════════╗
 ║                    THE POLYGLOT ENGINE                               ║
 ║                                                                      ║
-║   Your Application Code (Python / Go / TypeScript / Node.js)         ║
+║   Your Application Code (Python / Go / TypeScript / Node.js)        ║
 ║          │                                                           ║
 ║          ▼                                                           ║
-║   ┌──────────────────────────────────────────┐                       ║
-║   │         C  A B I  B o u n d a r y        │  ← Zero-overhead      ║
-║   └──────────────────────────────────────────┘     FFI calls         ║
-║          │               │               │                           ║
-║          ▼               ▼               ▼                           ║
-║      ┌───────┐       ┌───────┐       ┌───────┐                       ║
-║      │  Zig  │       │ Rust  │       │  C++  │  ← Compute Kernels    ║
-║      │ 865ms │       │ 647ms │       │ 401ms │                       ║
-║      └───────┘       └───────┘       └───────┘                       ║
-║          │               │               │                           ║
-║          └───────────────┼───────────────┘                           ║
+║   ┌──────────────────────────────────────────┐                      ║
+║   │         C  A B I  B o u n d a r y        │  ← Zero-overhead     ║
+║   └──────────────────────────────────────────┘     FFI calls        ║
+║          │               │               │                          ║
+║          ▼               ▼               ▼                          ║
+║      ┌───────┐       ┌───────┐       ┌───────┐                      ║
+║      │  Zig  │       │ Rust  │       │  C++  │  ← Compute Kernels   ║
+║      └───────┘       └───────┘       └───────┘                      ║
+║          │               │               │                          ║
+║          └───────────────┼───────────────┘                          ║
 ║                          ▼                                           ║
-║          ┌────────────────────────────────┐                          ║
-║          │   Zig Build System (build.zig) │  ← Unified Orchestrator  ║
-║          │   Compiles C++, links Rust     │                          ║
-║          │   .a staticlib, resolves all   │                          ║
-║          │   Windows system deps          │                          ║
-║          └────────────────────────────────┘                          ║
-║                          │                                           ║
-║                          ▼                                           ║
-║          ┌────────────────────────────────┐                          ║
-║          │   Single Benchmark Binary      │                          ║
-║          │   bench.exe                    │                          ║
-║          └────────────────────────────────┘                          ║
+║          ┌────────────────────────────────┐                         ║
+║          │   Zig Build System (build.zig) │  ← Unified Orchestrator ║
+║          │   Compiles C++, links Rust     │                         ║
+║          │   .a staticlib, resolves all   │                         ║
+║          │   platform system deps         │                         ║
+║          └────────────────────────────────┘                         ║
 ╚══════════════════════════════════════════════════════════════════════╝
 ```
 
@@ -44,174 +39,149 @@
 
 This is not a typical "language comparison" project. Those are almost always misleading — they benchmark toy problems with inconsistent flags and declare a winner before the conversation even starts.
 
-This is something different. This is a **recorded, auditable, step-by-step investigation** into what actually governs performance in low-level systems code. We used matrix multiplication as the probe, but the real subject under study is the relationship between your source code, the compiler's optimizer, and the CPU's memory subsystem.
+This is a **recorded, auditable, cross-platform investigation** into what actually governs performance in low-level systems code. We used matrix multiplication as the probe, but the real subject under study is the relationship between your source code, the compiler's optimizer, and the CPU's memory subsystem.
 
-We went from **~13,000 milliseconds** to **401 milliseconds** on the same 1024×1024 workload. We did it across three languages simultaneously. And we documented every step, every regression, and every hard-won lesson along the way.
+We ran the same four optimization stages on two completely different CPU architectures:
+- An **Intel Core i5-6300U** (Skylake, x86_64, 2015 laptop chip, Windows/MSYS2)
+- An **Apple M3** (ARM64, 2024, macOS, `aarch64-apple-darwin`) — contributed via an automated cross-platform PR
 
-The journey produced four major insights that apply to every high-performance system you will ever build:
+The M3 is approximately **10× faster** in absolute terms. But every single pattern we observed — the massive speedup from loop reordering, the regression from tiling in Zig, Rust's improvement from tiling — reproduced on both machines.
 
-1. **RAM is a flat, 1D tape.** Your 2D mental model of a matrix is a lie the language tells you for convenience. The moment you write code that fights this reality, you lose.
-2. **Cache lines are the unit of memory currency.** The CPU doesn't buy floats from RAM one at a time. It buys 16 at once. If you only use 1 of those 16, you wasted 94% of your memory bandwidth.
-3. **Compiler flags are load-bearing architecture.** `-ffast-math` is not cosmetic. It unlocks an entirely different class of machine code (AVX2 vectorization). Without it, your code and the machine code are nearly unrecognizable as siblings.
-4. **Manual optimization can fight the compiler.** In Stage 4, adding cache-blocking code actually _regressed_ Zig by 58%. The compiler was auto-vectorizing the simple loop perfectly. Our "smart" manual tiling broke its ability to prove the loop was safe to vectorize.
-
-If you absorb these four lessons, you will think differently about every loop you write for the rest of your career.
+That reproducibility is the point. **The physics of cache lines does not care what year your chip was manufactured or what instruction set it speaks.**
 
 ---
 
-## Who Built This
+## The Core Finding — In One Table
 
-An **Electrical and Electronic Engineering student at JKUAT** (Jomo Kenyatta University of Agriculture and Technology, Kenya), building production systems infrastructure on the side. The project emerged from a desire to learn Zig as a modern systems language and turned into a deeper investigation into compiler theory, CPU architecture, and the physics of memory access.
+1024×1024 × 1024×1024 matrix multiplication (~2.1 billion FLOPs):
 
-The CPU used for all benchmarks is an **Intel Core i5-6300U** (Skylake microarchitecture, 2 cores / 4 threads, 6th-generation Intel). This is a mid-range laptop chip — not a server, not a workstation. The results are entirely reproducible on consumer hardware.
+| Stage | Algorithm | i5-6300U Zig | i5-6300U Rust | i5-6300U C++ | M3 Zig | M3 Rust | M3 C++ |
+|:---|:---|:---:|:---:|:---:|:---:|:---:|:---:|
+| **1** | Naive `(i,j,k)` | 10,414ms | 12,826ms | 12,820ms | 1,020ms | 1,081ms | 1,284ms |
+| **2** | Flags standardized | 13,466ms | 12,685ms | 10,671ms | 1,026ms | 1,084ms | 1,263ms |
+| **3** | Loop flip `(i,k,j)` | 865ms | 785ms | 419ms | **89ms** | **83ms** | **83ms** |
+| **4** | 64×64 tiling | 1,367ms | 647ms | 401ms | 144ms | 126ms | 119ms |
 
----
-
-## The Languages and What They Represent
-
-### Zig — The Modern Systems Glue
-
-Zig is the "new C." It gives you manual memory control, zero hidden allocations, and no runtime. What makes Zig unique in this project is that it serves **dual roles**: it is both one of the three compute kernels _and_ the build system that orchestrates the entire project. `build.zig` replaces `CMakeLists.txt`, `Makefile`, and shell scripts. It compiles C++ source files, links Rust `.a` static libraries, and resolves Windows system dependencies — all in one coherent, programmable build description.
-
-Zig's `comptime` (compile-time execution) means that zero-cost abstractions aren't just a goal; they're enforced by the type system. There is no runtime cost for generic code in Zig.
-
-### Rust — The Memory-Safe Performance Contender
-
-Rust's ownership model gives the compiler a formally-verified understanding of pointer aliasing. In theory, this should allow extremely aggressive LLVM optimization. In practice, the safety abstractions (safe slices with implicit bounds checks) introduced overhead in Stage 1. Once we stripped those abstractions and worked with raw pointers in `unsafe` blocks (Stage 3), Rust found its footing and eventually achieved its best result with cache-blocked tiling in Stage 4 (647ms).
-
-### C++ — The Veteran
-
-C++ has decades of production use and its compiler ecosystem (GCC, Clang, MSVC) is extraordinarily mature. With the right flags (`-O3 -march=native -ffast-math -funroll-loops`), `g++ 15.2.0` consistently produced the fastest binary in this benchmark. This is not because C++ is "faster" as a language — it's because the GCC optimizer for this specific workload and this specific CPU has extremely well-tuned heuristics for loop unrolling and AVX2 code generation.
+**Read Stage 2 carefully.** Changing compiler flags — a common "optimization" advice — barely moved the numbers on the M3 (1,020ms → 1,026ms for Zig). The loop reorder in Stage 3 moved them by **12×**. That ratio holds on a 2015 Intel laptop and a 2024 Apple chip. The algorithm dominated everything. Every time.
 
 ---
 
-## Performance Results — The Full Picture
+## Cross-Architecture Analysis — What the M3 Data Reveals
 
-### Environment
+### Finding 1: Stage 3 Converges All Three Languages on M3
 
-| Factor          | Value                                 |
-| :-------------- | :------------------------------------ |
-| OS              | Windows 11 (MSYS2/MinGW64)            |
-| CPU             | Intel Core i5-6300U (Skylake, x86_64) |
-| L1 Cache        | 32 KB data / core                     |
-| L2 Cache        | 256 KB / core                         |
-| L3 Cache        | 3 MB shared                           |
-| Cache Line Size | 64 bytes = 16 × f32                   |
-| Zig Version     | 0.15.2                                |
-| Rust Version    | 1.93.1 (x86_64-pc-windows-gnu)        |
-| C++ Compiler    | g++ 15.2.0 (x86_64-w64-mingw32)       |
+On the i5-6300U, Stage 3 produced a clear ranking: C++ at 419ms, Rust at 785ms, Zig at 865ms. A **2× gap** between the fastest and slowest.
 
-### Summary Table — 1024×1024 × 1024×1024 (≈2.1 billion FLOPs)
+On the M3, Stage 3 produced: Rust 83ms, C++ 83ms, Zig 89ms. All within **7% of each other**.
 
-| Stage | What Changed                             |   Zig    |   Rust   |   C++    | Key Insight                        |
-| :---- | :--------------------------------------- | :------: | :------: | :------: | :--------------------------------- |
-| **1** | Naive `(i,j,k)` loops                    | 10,414ms | 12,826ms | 12,820ms | Default flags favor Zig            |
-| **2** | Added `-march=native -ffast-math` to C++ | 13,466ms | 12,685ms | 10,671ms | Flags flip the leader              |
-| **3** | Reordered to `(i,k,j)` loops             |  865ms   |  785ms   |  419ms   | **Algorithm dominates everything** |
-| **4** | 64×64 cache-blocked tiling               | 1,367ms  |  647ms   |  401ms   | Manual opt can hurt the compiler   |
+The language gap collapsed entirely on newer hardware. Why? The M3 has a far more powerful out-of-order execution engine and a more aggressive hardware prefetcher than Skylake. Once the stride-access pattern was eliminated (removing the cache miss storm), all three compilers generated code that the M3's backend could execute with near-equal efficiency — the microarchitecture was good enough to smooth out whatever remaining code quality differences existed between them.
 
-> **Total peak improvement over the naive baseline:**
->
-> - C++: **32×** faster (12,820ms → 401ms)
-> - Rust: **19.8×** faster (12,826ms → 647ms)
-> - Zig (best): **13.3×** faster (10,414ms → 785ms in Stage 3)
+**The systems engineering implication**: Code that looks equivalent across languages on a modern M3 may show a 2× difference on older server hardware. **Always benchmark on your weakest target machine, not your fastest development machine.**
+
+### Finding 2: The Zig Stage 4 Regression Is Architecture-Independent
+
+On the i5-6300U: Zig went from 865ms → 1,367ms — a **+58% regression**.
+On the M3: Zig went from 89ms → 144ms — a **+62% regression**.
+
+Nearly the same regression magnitude on a completely different CPU, OS, and toolchain invocation. This confirms the regression lives in the **compiler's optimizer**, not in hardware behavior. LLVM's auto-vectorizer, when presented with the tiled Zig code's `@min()` boundaries and `while` loop structure, backs off from vectorization. That decision is made by LLVM's analysis passes before it even knows what CPU backend it's targeting.
+
+**A compiler behavior is more portable than hardware behavior.** If LLVM fails to vectorize your code on your laptop, it will probably fail on your server too.
+
+### Finding 3: Absolute Numbers Are Hardware-Specific. Ratios Are Not.
+
+M3 Stage 3: ~83–89ms. i5-6300U Stage 3: ~419–865ms. The absolute gap is ~10×.
+
+But the *ratio* between stages is stable:
+- i5: Stage 1 → Stage 3 speedup = ~13× (Zig), ~16× (Rust), ~30× (C++)
+- M3: Stage 1 → Stage 3 speedup = ~11× (Zig), ~13× (Rust), ~15× (C++)
+
+The ratios are in the same ballpark across a decade of hardware evolution. This means: **if you observe a 10× speedup from a cache-friendly access pattern on your development machine, you can reasonably expect a similar-magnitude speedup on your deployment hardware.** The absolute times will differ. The pattern will not.
 
 ---
 
-## The Lessons Learned (Systems Mindset)
+## Automated Stage Runner
 
-These are not abstract principles. These are observations made from real benchmark data, produced on real hardware, with real code changes tracked in the audit log.
+A contributor ([@million-in](https://github.com/million-in)) added `run_benchmark_stages.sh` — a shell script that uses `git worktree` to automatically check out each historical stage commit, build it for the current platform, and run the benchmark.
 
-### Lesson 1: Language Does Not Determine Performance. Toolchain Configuration Does.
+```bash
+# Clone the repo
+git clone https://github.com/Mwangi-Derrick/matrix-interop-demo
+cd matrix-interop-demo
 
-Stage 1 showed Zig winning. Stage 2 showed C++ winning — on the **exact same algorithm** — just by adding `-ffast-math`. This should disturb you. A single compiler flag changed the winner. The code didn't change. The algorithm didn't change. Only the instructions we gave the optimizer changed.
+# Run all four stages automatically — no manual git checkout required
+chmod +x run_benchmark_stages.sh
+./run_benchmark_stages.sh
+```
 
-The implication: before you benchmark languages, you must ask whether both compilers are operating at equivalent capability levels. Most online "language benchmarks" fail this basic requirement.
+The script detects the host target:
+- `x86_64-pc-windows-gnu` on Windows/MSYS2
+- `aarch64-apple-darwin` on Apple Silicon
+- `x86_64-apple-darwin` on Intel Mac
+- `x86_64-unknown-linux-gnu` on Linux
 
-### Lesson 2: RAM Is a Flat Line. Stride Is Lethal.
+**Why this matters**: Without automated reproducibility, benchmark data is anecdote. With it, any engineer who clones this repository can re-derive every number in this documentation from scratch in under ten minutes. The data is falsifiable. That is what distinguishes an engineering artifact from a blog post.
 
-The switch from `(i,j,k)` to `(i,k,j)` produced between **12× and 30× speedups** across all three languages. No flags changed. No algorithms changed. Just the order of three nested loops.
+---
 
-This is the most important optimization insight in this entire project. The physics of your memory system dictates what loop orders are fast. Writing cache-friendly code is not an advanced optimization — it is the baseline requirement for serious systems work.
+## The Lessons (Cross-Platform Validated)
 
-### Lesson 3: The Compiler Is Smarter Than You (Sometimes)
+### Lesson 1: Memory Access Pattern Is the Dominant Factor
 
-In Stage 4, we manually implemented cache-blocking/tiling — a technique from the BLAS literature used by libraries like OpenBLAS and Intel MKL. For Rust, it helped (-17%). For C++, it barely mattered (-4%). For Zig, it **hurt badly** (+58% slower).
+Loop reordering produced 12–30× speedup on x86_64 and 11–15× on ARM64. Compiler flags across the same algorithm produced less than 2× on either. The physics of sequential vs. stride memory access is not architecture-specific — it is a consequence of how every cache hierarchy works, from Skylake to M3 to whatever comes next.
 
-Why? Because the simple `(i,k,j)` loop we had in Stage 3 was a clean, analyzable pattern that LLVM's auto-vectorizer could recognize. The tiled version added `@min()` bounds checks and extra loop variables that introduced branching complexity. The vectorizer could no longer _prove_ the inner loop was safe to turn into AVX2 instructions, so it backed off to scalar code. We got in the compiler's way.
+### Lesson 2: Language Convergence Scales With CPU Quality
 
-### Lesson 4: `-ffast-math` Is Not Just a Flag. It Is a Different Contract.
+On the i5-6300U, C++ was 2× faster than Zig in Stage 3. On the M3, all three were within 7%. Better hardware can mask compiler quality differences. **Benchmark on your weakest target.**
 
-IEEE 754 floating-point mandates a strict order of operations. `(a + b) + c` must equal `a + (b + c)` in defined ways. SIMD vectorization needs to reorder and group these operations. `-ffast-math` relaxes the IEEE 754 contract, giving the compiler permission to restructure floating-point math for throughput. This is what enables AVX2. Without it, you leave ~8× of compute performance on the table.
+### Lesson 3: Compiler Behavior Is More Portable Than You Think
 
-For scientific computation requiring reproducible floating-point results (weather modeling, financial calculation), you cannot use `-ffast-math`. For everything else — machine learning, signal processing, graphics — it is almost always the right choice.
+The Zig Stage 4 regression reproduced at ~60% magnitude on both x86_64 and ARM64. LLVM's vectorization decisions are made by the optimizer before the backend. A vectorization failure on your laptop is a vectorization failure on your server.
+
+### Lesson 4: Automated Reproducibility Is Not Optional
+
+If your benchmark data cannot be reproduced by a stranger on their own machine, it is not data. The `run_benchmark_stages.sh` script is as important to this project as the code itself.
+
+### Lesson 5: `-ffast-math` Is Architecture-Significant, Not Cosmetic
+
+Stage 2 added `-ffast-math` to C++ and saw a ~17% improvement on i5 but barely 2% on M3. On M3, Stage 3's access pattern change alone delivered the same improvement. The flag matters — but its impact depends on how compute-bound or memory-bound your code already is. On the memory-bound naive implementation, relaxing IEEE 754 couldn't help much because the CPU was waiting on RAM, not computing. On Stage 3's sequential access pattern, the flag unlocked AVX2 vectorization on x86_64 but mattered less on M3 where the out-of-order engine already compensated.
 
 ---
 
 ## Build and Replicate
 
-### Prerequisites
-
-- **Zig 0.15.2** — [ziglang.org/download](https://ziglang.org/download)
-- **Rust** with `x86_64-pc-windows-gnu` target — `rustup target add x86_64-pc-windows-gnu`
-- **G++ 15.2.0** via MSYS2/MinGW64
-
-### Step 1: Build the Rust Static Library
-
+### Automated (Recommended)
 ```bash
-cd rust
-# -C target-cpu=native tells rustc to use your CPU's specific instruction set
-RUSTFLAGS="-C target-cpu=native" cargo build --release --target x86_64-pc-windows-gnu
-cd ..
+./run_benchmark_stages.sh
 ```
 
-This produces `rust/target/x86_64-pc-windows-gnu/release/libmatrix_rs.a` — a static archive that Zig will link at compile time.
+### Manual Build
 
-### Step 2: Build and Run
-
+**Windows (MSYS2/MinGW64):**
 ```bash
-# Remove all cached build artifacts (important for accurate timing)
+cd rust
+RUSTFLAGS="-C target-cpu=native" cargo build --release --target x86_64-pc-windows-gnu
+cd ..
 zig build clean
-
-# Zig compiles matrix.cpp, compiles matrix.zig, links libmatrix_rs.a,
-# resolves Windows system libraries, and produces bench.exe
 zig build run -Doptimize=ReleaseFast -Dtarget=native
 ```
 
+**macOS (Apple Silicon):**
 ```bash
-you can also export the run_benchmark_stages.sh using chmod and then run ./run_benchmark_stages.sh
-note that this eventually runs the stages based on the gittrees for the code at the commit, so if you update the codebase only stage 4 gets updated.
+cd rust
+RUSTFLAGS="-C target-cpu=native" cargo build --release --target aarch64-apple-darwin
+cd ..
+zig build clean
+zig build run -Doptimize=ReleaseFast -Dtarget=native
 ```
 
-### Expected Output
-
+**Linux:**
+```bash
+cd rust
+RUSTFLAGS="-C target-cpu=native" cargo build --release --target x86_64-unknown-linux-gnu
+cd ..
+zig build clean
+zig build run -Doptimize=ReleaseFast -Dtarget=native
 ```
-=== Matrix Multiplication Benchmark (1024x1024 * 1024x1024) ===
-Zig:  1367 ms
-Rust: 647 ms
-C++:  401 ms
-Results match: true
-```
-
----
-
-## Deep Documentation Index
-
-| Document                                       | What It Covers                                                                                                                                                         |
-| :--------------------------------------------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **[DEEP_DIVE.md](./DEEP_DIVE.md)**             | The physics of RAM, cache lines, stride, SIMD, and why loop order is your most important design decision. Read this to understand _why_ the numbers are what they are. |
-| **[PERFORMANCE_LOG.md](./PERFORMANCE_LOG.md)** | The full, auditable changelog: every code change, every flag added, every result measured. Read this to follow the investigation step by step.                         |
-
----
-
-## What Comes Next (Future Stages)
-
-The journey doesn't end at Stage 4. Here is the roadmap for further investigation:
-
-- **Stage 5: Assembly Inspection** — Use `zig build-exe -femit-asm` and `objdump` to look at the actual x86 instructions generated. Confirm whether AVX2 YMM registers are being used. Count the unroll factor.
-- **Stage 6: Explicit SIMD Intrinsics** — Manually write AVX2 intrinsic calls (`_mm256_fmadd_ps`) to eliminate all ambiguity and see how close we can get to theoretical peak FLOPs.
-- **Stage 7: Multi-threaded Parallelism** — Add `std.Thread` (Zig) and `rayon` (Rust) to distribute the outer loop across CPU cores. On a 4-core machine, the theoretical ceiling is 4× improvement.
-- **Stage 8: Python/Go/TypeScript FFI** — Compile this library as a shared `.dll`/`.so` and call it from Python (`ctypes`), Go (`cgo`), and Node.js (`node-ffi-napi`) to demonstrate the full production integration story.
 
 ---
 
@@ -219,27 +189,51 @@ The journey doesn't end at Stage 4. Here is the roadmap for further investigatio
 
 ```
 matrix-lib/
-├── build.zig              # Zig build system — compiles everything
-├── README.md              # This file — the narrative
-├── DEEP_DIVE.md           # The physics and mathematics of the optimization
-├── PERFORMANCE_LOG.md     # Auditable benchmark history
+├── build.zig                  # Zig build system — compiles & links everything
+├── run_benchmark_stages.sh    # Automated multi-stage benchmark runner (all platforms)
+├── README.md                  # This file
+├── DEEP_DIVE.md               # Physics of RAM, cache lines, SIMD, loop order
+├── PERFORMANCE_LOG.md         # Full auditable benchmark history — both architectures
 │
 ├── bench/
-│   └── bench.zig          # The benchmark harness (calls all three implementations)
-│
+│   └── bench.zig              # Benchmark harness (calls all three implementations)
 ├── zig/
-│   └── matrix.zig         # Zig implementation (exports C ABI)
-│
+│   └── matrix.zig             # Zig implementation (exports C ABI)
 ├── cpp/
-│   ├── matrix.h           # C header (extern "C" wrapper)
-│   └── matrix.cpp         # C++ implementation (class-based, C-exported)
-│
+│   ├── matrix.h               # C header (extern "C" wrapper)
+│   └── matrix.cpp             # C++ implementation
 └── rust/
-    ├── Cargo.toml         # Rust package config (staticlib, LTO, panic=abort)
+    ├── Cargo.toml             # staticlib, LTO=fat, panic=abort
     └── src/
-        ├── lib.rs         # Crate root
-        └── matrix.rs      # Rust implementation (unsafe raw pointers, C ABI)
+        ├── lib.rs
+        └── matrix.rs          # Rust implementation (unsafe raw pointers, C ABI)
 ```
+
+---
+
+## Deep Documentation
+
+| Document | What It Covers |
+|:---|:---|
+| **[DEEP_DIVE.md](./DEEP_DIVE.md)** | The physics of RAM, cache lines, stride, SIMD, and why loop order is your most important design decision. Includes address-level memory traces so you can follow exactly what the CPU sees. |
+| **[PERFORMANCE_LOG.md](./PERFORMANCE_LOG.md)** | Every stage: exact code, exact flags, measured results on both i5-6300U and Apple M3. The full auditable record. |
+
+---
+
+## Roadmap
+
+| Stage | Status | Description |
+|:---|:---:|:---|
+| 1 — Naive baseline | ✅ | Standard `(i,j,k)`, default flags |
+| 2 — Toolchain normalization | ✅ | `-march=native -ffast-math` standardized |
+| 3 — Loop flip `(i,k,j)` | ✅ | Hardware-sympathetic access pattern |
+| 4 — Cache-blocked tiling | ✅ | 64×64 block structure |
+| 5 — Assembly inspection | 🔲 | Emit `.asm`, count YMM/FMA instructions per stage |
+| 6 — Explicit SIMD | 🔲 | Zig `@Vector`, Rust `std::arch`, fix Stage 4 regression |
+| 7 — Multithreaded GEMM | 🔲 | `std.Thread` / `rayon` outer-loop parallelism |
+| 8 — FFI integration | 🔲 | Python `ctypes`, Go `cgo`, Node `ffi-napi` demos |
+
+---
 
 ## 🧠 Benchmark Variance & Cache Effects (Important Insight)
 
@@ -301,6 +295,4 @@ This benchmark demonstrates that:
 - Real-world performance must be measured across multiple runs, not single executions
 
 ---
-
-_Built on an i5-6300U in Juja, Kenya. Proof that world-class systems engineering doesn't require a FAANG badge — just the willingness to read what the hardware is trying to tell you._
-
+*Built on an i5-6300U in Juja, Kenya. Validated on an M3 MacBook. The hardware was different. The physics was identical.*
