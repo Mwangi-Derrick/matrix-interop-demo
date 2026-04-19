@@ -84,30 +84,13 @@ jobs:
           set -euo pipefail
           bash ./run_benchmark_stages.sh 2>&1 | tee ci-results/benchmark.log
 
-      - name: Parse benchmark results
+      - name: Extract benchmark results
         if: always()
         shell: bash
         run: |
           set -euo pipefail
-          {
-            echo "| Stage | Zig | Rust | C++ | Match |"
-            echo "|---|---:|---:|---:|---|"
-            awk '
-              /^=== / && $0 !~ /Matrix Multiplication Benchmark/ {
-                stage = $0
-                gsub(/^=== /, "", stage)
-                gsub(/ ===$/, "", stage)
-                next
-              }
-              /^Zig:/ { zig = $2 " ms"; next }
-              /^Rust:/ { rust = $2 " ms"; next }
-              /^C\+\+:/ { cpp = $2 " ms"; next }
-              /^Results match:/ {
-                match = $3
-                printf("| %s | %s | %s | %s | %s |\n", stage, zig, rust, cpp, match)
-              }
-            ' ci-results/benchmark.log
-          } > ci-results/results-table.md
+          grep -E '^(=== |Benchmark:|Zig:|Rust:|C\+\+:|Results match:)' \
+            ci-results/benchmark.log > ci-results/results-summary.txt
 
       - name: Publish workflow summary
         if: always()
@@ -122,9 +105,11 @@ jobs:
             echo "- Rust: \`$(rustc --version)\`"
             echo "- Zig: \`$(zig version)\`"
             echo
-            echo "### Parsed Results"
+            echo "### Benchmark Results"
             echo
-            cat ci-results/results-table.md
+            echo '```text'
+            cat ci-results/results-summary.txt
+            echo '```'
             echo
             echo "### Runner Info"
             echo
