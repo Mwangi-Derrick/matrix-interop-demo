@@ -1,0 +1,113 @@
+name: Benchmark Matrix
+
+on:
+  push:
+    branches:
+      - master
+
+permissions:
+  contents: read
+
+concurrency:
+  group: benchmark-matrix-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  ZIG_VERSION: 0.15.2
+
+jobs:
+  benchmark:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            name: Linux x64
+            artifact_suffix: linux-x64
+          - os: macos-latest
+            name: macOS ARM64
+            artifact_suffix: macos-arm64
+          - os: macos-15-intel
+            name: macOS Intel
+            artifact_suffix: macos-intel
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Set up Zig
+        uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+
+      - name: Show toolchain versions
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustc --version
+          cargo --version
+          zig version
+
+      - name: Capture runner information
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ci-results
+          {
+            echo "runner_os=${RUNNER_OS}"
+            echo "runner_arch=${RUNNER_ARCH}"
+            echo "image_os=${ImageOS:-unknown}"
+            echo "image_version=${ImageVersion:-unknown}"
+            echo "github_sha=${GITHUB_SHA}"
+            echo "rustc=$(rustc --version)"
+            echo "cargo=$(cargo --version)"
+            echo "zig=$(zig version)"
+            echo "uname=$(uname -a)"
+          } > ci-results/runner-info.txt
+
+      - name: Run stage benchmarks
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash ./run_benchmark_stages.sh | tee ci-results/benchmark.log
+
+      - name: Publish workflow summary
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "## ${RUNNER_OS} / ${RUNNER_ARCH}"
+            echo
+            echo "- Runner image: ${ImageOS:-unknown} ${ImageVersion:-unknown}"
+            echo "- Commit: \`${GITHUB_SHA}\`"
+            echo "- Rust: \`$(rustc --version)\`"
+            echo "- Zig: \`$(zig version)\`"
+            echo
+            echo "### Runner Info"
+            echo
+            echo '```text'
+            cat ci-results/runner-info.txt
+            echo '```'
+            echo
+            echo "### Benchmark Output"
+            echo
+            echo '```text'
+            cat ci-results/benchmark.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload benchmark artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-${{ matrix.artifact_suffix }}
+          path: ci-results/
+          if-no-files-found: error

@@ -28,7 +28,7 @@ const Benchmark = struct {
     rust_ns: [rounds]u64 = undefined,
     cpp_ns: [rounds]u64 = undefined,
 };
-
+//removed the noise and warmup issue on startup now we going for the mean of 5 times run 
 const rounds: usize = 5;
 
 fn runOnce(
@@ -93,17 +93,20 @@ pub fn main() !void {
         allocator.free(result_rust);
         allocator.free(result_cpp);
     }
-
+    
+    //normal init 
     var prng = std.Random.DefaultPrng.init(0xdeadbeef);
     const rand = prng.random();
     for (a) |*v| v.* = rand.float(f32);
     for (b) |*v| v.* = rand.float(f32);
-
+    
+    // setup a warmup order 
     const warmup_order = [_]Impl{ .cpp, .rust, .zig };
     for (warmup_order) |impl| {
         _ = try runOnce(impl, a, m, n, b, p, result_zig, result_rust, result_cpp);
     }
-
+    
+    //benchmarking logic, previous version didnt give a fair advantage to a binary run at first now we run all orders first, 
     var benchmark = Benchmark{};
     const order = [_][3]Impl{
         .{ .cpp, .rust, .zig },
@@ -122,7 +125,8 @@ pub fn main() !void {
             }
         }
     }
-
+    
+    //mean averaging
     const zig_time = roundMs(medianNs(benchmark.zig_ns));
     const rust_time = roundMs(medianNs(benchmark.rust_ns));
     const cpp_time = roundMs(medianNs(benchmark.cpp_ns));
