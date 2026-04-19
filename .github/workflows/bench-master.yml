@@ -26,6 +26,9 @@ jobs:
           - os: ubuntu-latest
             name: Linux x64
             artifact_suffix: linux-x64
+          - os: windows-latest
+            name: Windows x64
+            artifact_suffix: windows-x64
           - os: macos-latest
             name: macOS ARM64
             artifact_suffix: macos-arm64
