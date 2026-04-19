@@ -27,7 +27,7 @@ pub fn build(b: *std.Build) void {
         },
     });
     bench.addIncludePath(b.path("cpp"));
-    bench.linkSystemLibrary("stdc++");
+    bench.linkSystemLibrary(cppRuntimeFor(target));
 
     // Compile and link Zig implementation
     const zig_obj = b.addObject(.{
@@ -41,7 +41,10 @@ pub fn build(b: *std.Build) void {
     bench.addObject(zig_obj);
 
     // Link Rust static library
-    const rust_lib_path = "rust/target/x86_64-pc-windows-gnu/release/libmatrix_rs.a";
+    const rust_lib_path = b.fmt(
+        "rust/target/{s}/release/libmatrix_rs.a",
+        .{rustTargetTriple(target)},
+    );
     bench.addObjectFile(b.path(rust_lib_path));
 
     // Windows-specific libraries for Rust/C++ interop
@@ -74,4 +77,41 @@ pub fn build(b: *std.Build) void {
             std.fs.cwd().deleteTree(path2) catch {};
         }
     }.make;
+}
+// Add support for apple's stdc++
+fn cppRuntimeFor(target: std.Build.ResolvedTarget) []const u8 {
+    return switch (target.result.os.tag) {
+        .macos => "c++",
+        else => "stdc++",
+    };
+}
+// logic for auto detection at compile time.
+fn rustTargetTriple(target: std.Build.ResolvedTarget) []const u8 {
+    return switch (target.result.os.tag) {
+        .linux => switch (target.result.cpu.arch) {
+            .aarch64 => "aarch64-unknown-linux-gnu",
+            .x86_64 => "x86_64-unknown-linux-gnu",
+            else => unsupportedRustTarget(target),
+        },
+        .macos => switch (target.result.cpu.arch) {
+            .aarch64 => "aarch64-apple-darwin",
+            .x86_64 => "x86_64-apple-darwin",
+            else => unsupportedRustTarget(target),
+        },
+        .windows => switch (target.result.cpu.arch) {
+            .x86_64 => "x86_64-pc-windows-gnu",
+            else => unsupportedRustTarget(target),
+        },
+        else => unsupportedRustTarget(target),
+    };
+}
+// just in case someone run it on another os not like i know who will though haha
+fn unsupportedRustTarget(target: std.Build.ResolvedTarget) noreturn {
+    std.debug.panic(
+        "unsupported target for Rust static library: {s}-{s}",
+        .{
+            @tagName(target.result.cpu.arch),
+            @tagName(target.result.os.tag),
+        },
+    );
 }
