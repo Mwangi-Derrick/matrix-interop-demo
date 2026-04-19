@@ -78,7 +78,7 @@ pub fn build(b: *std.Build) void {
         }
     }.make;
 }
-// Add support for apple's stdc++
+// Add support for apple's libc++
 fn cppRuntimeFor(target: std.Build.ResolvedTarget) []const u8 {
     return switch (target.result.os.tag) {
         .macos => "c++",

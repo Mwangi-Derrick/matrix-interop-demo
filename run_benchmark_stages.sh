@@ -4,6 +4,8 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/matrix-stages.XXXXXX")"
 KEEP_WORKTREES="${KEEP_WORKTREES:-0}"
+USE_CURRENT_ZIG_ALL_STAGES="${USE_CURRENT_ZIG_ALL_STAGES:-0}"
+USE_STAGE_MATCHED_ZIG="${USE_STAGE_MATCHED_ZIG:-1}"
 
 declare -a WORKTREES=()
 
@@ -32,6 +34,10 @@ detect_host() {
             RUST_TARGET="x86_64-unknown-linux-gnu"
             CXX_RUNTIME="stdc++"
             ;;
+        MINGW64_NT-*:x86_64|MSYS_NT-*:x86_64|CYGWIN_NT-*:x86_64)
+            RUST_TARGET="x86_64-pc-windows-gnu"
+            CXX_RUNTIME="stdc++"
+            ;;
         *)
             printf 'unsupported host: %s:%s\n' "$(uname -s)" "$(uname -m)" >&2
             exit 1
@@ -43,9 +49,11 @@ cleanup() {
     local exit_code=$?
 
     if [[ "$KEEP_WORKTREES" != "1" ]]; then
-        for worktree in "${WORKTREES[@]}"; do
-            git -C "$ROOT_DIR" worktree remove --force "$worktree" >/dev/null 2>&1 || true
-        done
+        if ((${#WORKTREES[@]} > 0)); then
+            for worktree in "${WORKTREES[@]}"; do
+                git -C "$ROOT_DIR" worktree remove --force "$worktree" >/dev/null 2>&1 || true
+            done
+        fi
         rm -rf "$TMP_ROOT"
     else
         printf 'kept worktrees in %s\n' "$TMP_ROOT" >&2
@@ -88,6 +96,29 @@ prepare_rust_crate_root() {
     cp "$ROOT_DIR/rust/src/lib.rs" "$dir/rust/src/lib.rs"
 }
 
+prepare_benchmark_harness() {
+    local dir="$1"
+    cp "$ROOT_DIR/bench/bench.zig" "$dir/bench/bench.zig"
+}
+
+prepare_current_zig_kernel() {
+    local dir="$1"
+    cp "$ROOT_DIR/zig/matrix.zig" "$dir/zig/matrix.zig"
+}
+
+prepare_stage_matched_zig_kernel() {
+    local dir="$1"
+    local stage="$2"
+    local src="$ROOT_DIR/zig/matrix_${stage}.zig"
+
+    if [[ ! -f "$src" ]]; then
+        printf 'missing stage-matched Zig kernel: %s\n' "$src" >&2
+        exit 1
+    fi
+
+    cp "$src" "$dir/zig/matrix.zig"
+}
+
 build_rust() {
     local dir="$1"
     local rustflags="$2"
@@ -122,7 +153,13 @@ run_stage() {
     shift 3
 
     local dir
-    printf '\n=== %s (%s) ===\n' "$label" "$commit"
+    local zig_source_note=""
+    if [[ "$USE_CURRENT_ZIG_ALL_STAGES" == "1" ]]; then
+        zig_source_note=" [current-zig]"
+    elif [[ "$USE_STAGE_MATCHED_ZIG" == "1" ]]; then
+        zig_source_note=" [stage-matched-zig]"
+    fi
+    printf '\n=== %s (%s)%s ===\n' "$label" "$commit" "$zig_source_note"
     dir="$(add_worktree "$label" "$commit")"
 
     if [[ "$label" == "stage1" ]]; then
@@ -132,8 +169,23 @@ run_stage() {
     fi
 
     prepare_rust_crate_root "$dir"
+    prepare_benchmark_harness "$dir"
+    if [[ "$USE_CURRENT_ZIG_ALL_STAGES" == "1" ]]; then
+        prepare_current_zig_kernel "$dir"
+    elif [[ "$USE_STAGE_MATCHED_ZIG" == "1" ]]; then
+        prepare_stage_matched_zig_kernel "$dir" "$label"
+    fi
     build_rust "$dir" "$rustflags"
     run_zig "$dir" "$@"
+}
+
+run_current() {
+    local head
+    head="$(git -C "$ROOT_DIR" rev-parse --short HEAD)"
+
+    printf '\n=== current (%s) ===\n' "$head"
+    build_rust "$ROOT_DIR" "-C target-cpu=native"
+    run_zig "$ROOT_DIR" -Doptimize=ReleaseFast -Dtarget=native
 }
 
 main() {
@@ -146,12 +198,18 @@ main() {
     detect_host
 
     printf 'Host target: %s\n' "$RUST_TARGET"
+    if [[ "$USE_CURRENT_ZIG_ALL_STAGES" == "1" ]]; then
+        printf 'Using current zig/matrix.zig for historical stages\n'
+    elif [[ "$USE_STAGE_MATCHED_ZIG" == "1" ]]; then
+        printf 'Using stage-matched Zig kernels (zig/matrix_stage{1..4}.zig)\n'
+    fi
     rustup target add "$RUST_TARGET"
 
     run_stage stage1 f81426b "" -Doptimize=ReleaseFast
     run_stage stage2 906609d "-C target-cpu=native" -Doptimize=ReleaseFast -Dtarget=native
     run_stage stage3 c7c6d4c "-C target-cpu=native" -Doptimize=ReleaseFast -Dtarget=native
     run_stage stage4 32f7d90 "-C target-cpu=native" -Doptimize=ReleaseFast -Dtarget=native
+    run_current
 }
 
 main "$@"
