@@ -26,6 +26,9 @@ jobs:
           - os: ubuntu-latest
             name: Linux x64
             artifact_suffix: linux-x64
+          - os: ubuntu-24.04-arm
+            name: Linux ARM64
+            artifact_suffix: linux-arm64
           - os: windows-latest
             name: Windows x64
             artifact_suffix: windows-x64
@@ -79,7 +82,32 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          bash ./run_benchmark_stages.sh | tee ci-results/benchmark.log
+          bash ./run_benchmark_stages.sh 2>&1 | tee ci-results/benchmark.log
+
+      - name: Parse benchmark results
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "| Stage | Zig | Rust | C++ | Match |"
+            echo "|---|---:|---:|---:|---|"
+            awk '
+              /^=== / && $0 !~ /Matrix Multiplication Benchmark/ {
+                stage = $0
+                gsub(/^=== /, "", stage)
+                gsub(/ ===$/, "", stage)
+                next
+              }
+              /^Zig:/ { zig = $2 " ms"; next }
+              /^Rust:/ { rust = $2 " ms"; next }
+              /^C\+\+:/ { cpp = $2 " ms"; next }
+              /^Results match:/ {
+                match = $3
+                printf("| %s | %s | %s | %s | %s |\n", stage, zig, rust, cpp, match)
+              }
+            ' ci-results/benchmark.log
+          } > ci-results/results-table.md
 
       - name: Publish workflow summary
         if: always()
@@ -93,6 +121,10 @@ jobs:
             echo "- Commit: \`${GITHUB_SHA}\`"
             echo "- Rust: \`$(rustc --version)\`"
             echo "- Zig: \`$(zig version)\`"
+            echo
+            echo "### Parsed Results"
+            echo
+            cat ci-results/results-table.md
             echo
             echo "### Runner Info"
             echo
