@@ -29,6 +29,8 @@ pub fn build(b: *std.Build) void {
             "-march=native",
             "-ffast-math",
             "-funroll-loops",
+            "-fvectorize",
+            "-fslp-vectorize",
         },
     });
     bench.addIncludePath(b.path("cpp"));
