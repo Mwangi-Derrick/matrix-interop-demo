@@ -4,8 +4,18 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/matrix-stages.XXXXXX")"
 KEEP_WORKTREES="${KEEP_WORKTREES:-0}"
-USE_CURRENT_ZIG_ALL_STAGES="${USE_CURRENT_ZIG_ALL_STAGES:-0}"
-USE_STAGE_MATCHED_ZIG="${USE_STAGE_MATCHED_ZIG:-1}"
+
+# Ensure cargo/rustup/zig are on PATH.
+# On macOS/Linux, $HOME/.cargo/bin is the standard location.
+# On Windows (Git Bash / MSYS2), $HOME is /home/user but cargo lives
+# under the Windows profile. We check both without calling cmd.exe.
+_cargo_dirs=("$HOME/.cargo/bin" "/c/Users/$(whoami)/.cargo/bin")
+for _d in "${_cargo_dirs[@]}"; do
+    if [[ -d "$_d" ]] && ! command -v cargo >/dev/null 2>&1; then
+        export PATH="$_d:$PATH"
+        break
+    fi
+done
 
 declare -a WORKTREES=()
 
@@ -101,11 +111,15 @@ prepare_benchmark_harness() {
     cp "$ROOT_DIR/bench/bench.zig" "$dir/bench/bench.zig"
 }
 
-prepare_current_zig_kernel() {
+# Copy the cache detection infrastructure (required by bench.zig)
+prepare_cache_infrastructure() {
     local dir="$1"
-    cp "$ROOT_DIR/zig/matrix.zig" "$dir/zig/matrix.zig"
+    mkdir -p "$dir/bench/cache"
+    cp "$ROOT_DIR/bench/cache_info.zig" "$dir/bench/cache_info.zig"
+    cp "$ROOT_DIR/bench/cache/"*.zig "$dir/bench/cache/"
 }
 
+# Copy stage-matched Zig kernel → zig/matrix.zig in worktree
 prepare_stage_matched_zig_kernel() {
     local dir="$1"
     local stage="$2"
@@ -117,6 +131,34 @@ prepare_stage_matched_zig_kernel() {
     fi
 
     cp "$src" "$dir/zig/matrix.zig"
+}
+
+# Copy stage-matched C++ kernel → cpp/matrix.cpp in worktree
+prepare_stage_matched_cpp_kernel() {
+    local dir="$1"
+    local stage="$2"
+    local src="$ROOT_DIR/cpp/matrix_${stage}.cpp"
+
+    if [[ ! -f "$src" ]]; then
+        printf 'missing stage-matched C++ kernel: %s\n' "$src" >&2
+        exit 1
+    fi
+
+    cp "$src" "$dir/cpp/matrix.cpp"
+}
+
+# Copy stage-matched Rust kernel → rust/src/matrix.rs in worktree
+prepare_stage_matched_rust_kernel() {
+    local dir="$1"
+    local stage="$2"
+    local src="$ROOT_DIR/rust/src/matrix_${stage}.rs"
+
+    if [[ ! -f "$src" ]]; then
+        printf 'missing stage-matched Rust kernel: %s\n' "$src" >&2
+        exit 1
+    fi
+
+    cp "$src" "$dir/rust/src/matrix.rs"
 }
 
 build_rust() {
@@ -153,28 +195,23 @@ run_stage() {
     shift 3
 
     local dir
-    local zig_source_note=""
-    if [[ "$USE_CURRENT_ZIG_ALL_STAGES" == "1" ]]; then
-        zig_source_note=" [current-zig]"
-    elif [[ "$USE_STAGE_MATCHED_ZIG" == "1" ]]; then
-        zig_source_note=" [stage-matched-zig]"
-    fi
-    printf '\n=== %s (%s)%s ===\n' "$label" "$commit" "$zig_source_note"
+    printf '\n=== %s (%s) [stage-matched] ===\n' "$label" "$commit"
     dir="$(add_worktree "$label" "$commit")"
 
-    if [[ "$label" == "stage1" ]]; then
-        patch_stage1_build "$dir"
-    else
-        prepare_modern_build "$dir"
-    fi
+    # Always use the modern build.zig — it handles all targets via
+    # rustTargetTriple() and registers the cache_info module needed by bench.zig.
+    # The old patch_stage1_build is no longer needed.
+    prepare_modern_build "$dir"
 
+    # Copy all stage-matched kernels (immutable snapshots)
+    prepare_stage_matched_zig_kernel "$dir" "$label"
+    prepare_stage_matched_cpp_kernel "$dir" "$label"
+    cp "$ROOT_DIR/cpp/matrix.h" "$dir/cpp/matrix.h"   # modern 10-param header
+    prepare_stage_matched_rust_kernel "$dir" "$label"
     prepare_rust_crate_root "$dir"
     prepare_benchmark_harness "$dir"
-    if [[ "$USE_CURRENT_ZIG_ALL_STAGES" == "1" ]]; then
-        prepare_current_zig_kernel "$dir"
-    elif [[ "$USE_STAGE_MATCHED_ZIG" == "1" ]]; then
-        prepare_stage_matched_zig_kernel "$dir" "$label"
-    fi
+    prepare_cache_infrastructure "$dir"
+
     build_rust "$dir" "$rustflags"
     run_zig "$dir" "$@"
 }
@@ -183,9 +220,9 @@ run_current() {
     local head
     head="$(git -C "$ROOT_DIR" rev-parse --short HEAD)"
 
-    printf '\n=== current (%s) ===\n' "$head"
+    printf '\n=== stage5 (%s) [current] ===\n' "$head"
     build_rust "$ROOT_DIR" "-C target-cpu=native"
-    run_zig "$ROOT_DIR" -Doptimize=ReleaseFast -Dtarget=native
+    run_zig "$ROOT_DIR" -Doptimize=ReleaseFast
 }
 
 main() {
@@ -198,11 +235,7 @@ main() {
     detect_host
 
     printf 'Host target: %s\n' "$RUST_TARGET"
-    if [[ "$USE_CURRENT_ZIG_ALL_STAGES" == "1" ]]; then
-        printf 'Using current zig/matrix.zig for historical stages\n'
-    elif [[ "$USE_STAGE_MATCHED_ZIG" == "1" ]]; then
-        printf 'Using stage-matched Zig kernels (zig/matrix_stage{1..4}.zig)\n'
-    fi
+    printf 'Using stage-matched kernels for all languages (zig, cpp, rust)\n'
     rustup target add "$RUST_TARGET"
 
     run_stage stage1 f81426b "" -Doptimize=ReleaseFast
