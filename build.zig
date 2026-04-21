@@ -5,6 +5,10 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    const cache_module = b.createModule(.{
+        .root_source_file = b.path("bench/cache_info.zig"),
+    });
+
     // Build the benchmark executable
     const bench = b.addExecutable(.{
         .name = "bench",
@@ -14,6 +18,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
+    bench.root_module.addImport("cache_info", cache_module);
 
     // Link C++ implementation with rigorous optimization flags
     bench.addCSourceFiles(.{
@@ -33,11 +38,12 @@ pub fn build(b: *std.Build) void {
     const zig_obj = b.addObject(.{
         .name = "zig_matrix",
         .root_module = b.createModule(.{
-            .root_source_file = b.path("zig/matrix.zig"),
+            .root_source_file = b.path("zig/matrix_stage4.zig"),
             .target = target,
             .optimize = optimize,
         }),
     });
+    zig_obj.root_module.addImport("cache_info", cache_module);
     bench.addObject(zig_obj);
 
     // Link Rust static library
