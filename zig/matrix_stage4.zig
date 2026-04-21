@@ -1,6 +1,4 @@
 const std = @import("std");
-const cache_info = @import("cache_info");
-
 
 export fn zig_matrix_multiply(
     a_ptr: [*]const f32,
@@ -10,70 +8,105 @@ export fn zig_matrix_multiply(
     _b_rows: usize,
     b_cols: usize,
     result_ptr: [*]f32,
-    block_size: usize,
+    l1_block: usize,
+    l2_block: usize,
+    l3_block: usize,
 ) void {
     _ = _b_rows;
     const m = a_rows;
     const n = a_cols;
     const p = b_cols;
 
-    // Use suggested block size if none provided (requires detection/allocator elsewhere,
-    // but here we just ensure we have a valid block size)
-    const actual_block_size = if (block_size == 0) 64 else block_size;
-
     @memset(result_ptr[0 .. m * p], 0);
 
-    if (m % actual_block_size == 0 and n % actual_block_size == 0 and p % actual_block_size == 0) {
-        var ii: usize = 0;
-        while (ii < m) : (ii += actual_block_size) {
-            var kk: usize = 0;
-            while (kk < n) : (kk += actual_block_size) {
-                var jj: usize = 0;
-                while (jj < p) : (jj += actual_block_size) {
-                    var i: usize = 0;
-                    while (i < actual_block_size) : (i += 1) {
-                        const a_row = a_ptr + (ii + i) * n + kk;
-                        const result_tile = result_ptr + (ii + i) * p + jj;
+    // L3 Blocking
+    var iii: usize = 0;
+    while (iii < m) : (iii += l3_block) {
+        const i_l3_end = @min(iii + l3_block, m);
+        var kkk: usize = 0;
+        while (kkk < n) : (kkk += l3_block) {
+            const k_l3_end = @min(kkk + l3_block, n);
+            var jjj: usize = 0;
+            while (jjj < p) : (jjj += l3_block) {
+                const j_l3_end = @min(jjj + l3_block, p);
 
-                        var k: usize = 0;
-                        while (k < actual_block_size) : (k += 1) {
-                            const a_val = a_row[k];
-                            const b_tile = b_ptr + (kk + k) * p + jj;
+                // L2 Blocking
+                var ii: usize = iii;
+                while (ii < i_l3_end) : (ii += l2_block) {
+                    const i_l2_end = @min(ii + l2_block, i_l3_end);
+                    var kk: usize = kkk;
+                    while (kk < k_l3_end) : (kk += l2_block) {
+                        const k_l2_end = @min(kk + l2_block, k_l3_end);
+                        var jj: usize = jjj;
+                        while (jj < j_l3_end) : (jj += l2_block) {
+                            const j_l2_end = @min(jj + l2_block, j_l3_end);
 
-                            for (0..actual_block_size) |j| {
-                                result_tile[j] += a_val * b_tile[j];
+                            // L1 Blocking
+                            var i: usize = ii;
+                            while (i < i_l2_end) : (i += l1_block) {
+                                const i_l1_end = @min(i + l1_block, i_l2_end);
+                                var k: usize = kk;
+                                while (k < k_l2_end) : (k += l1_block) {
+                                    const k_l1_end = @min(k + l1_block, k_l2_end);
+                                    var j: usize = jj;
+                                    while (j < j_l2_end) : (j += l1_block) {
+                                        const j_l1_end = @min(j + l1_block, j_l2_end);
+
+                                        // Register Micro-kernel (4x4 tile)
+                                        // This processes 4 rows and 4 columns of C simultaneously in registers
+                                        var im = i;
+                                        while (im + 4 <= i_l1_end) : (im += 4) {
+                                            var jm = j;
+                                            while (jm + 4 <= j_l1_end) : (jm += 4) {
+                                                // Load 4x4 accumulators into registers (as vectors)
+                                                var c0 = @as(@Vector(4, f32), result_ptr[im * p + jm ..][0..4].*);
+                                                var c1 = @as(@Vector(4, f32), result_ptr[(im + 1) * p + jm ..][0..4].*);
+                                                var c2 = @as(@Vector(4, f32), result_ptr[(im + 2) * p + jm ..][0..4].*);
+                                                var c3 = @as(@Vector(4, f32), result_ptr[(im + 3) * p + jm ..][0..4].*);
+
+                                                var km = k;
+                                                while (km < k_l1_end) : (km += 1) {
+                                                    // Load 4 elements of B (one row of the 4x4 B tile)
+                                                    const b_vec = @as(@Vector(4, f32), b_ptr[km * p + jm ..][0..4].*);
+                                                    
+                                                    // Broadcast each A element and perform FMA(fused multiply add)
+                                                    c0 += @as(@Vector(4, f32), @splat(a_ptr[im * n + km])) * b_vec;
+                                                    c1 += @as(@Vector(4, f32), @splat(a_ptr[(im + 1) * n + km])) * b_vec;
+                                                    c2 += @as(@Vector(4, f32), @splat(a_ptr[(im + 2) * n + km])) * b_vec;
+                                                    c3 += @as(@Vector(4, f32), @splat(a_ptr[(im + 3) * n + km])) * b_vec;
+                                                }
+
+                                                // Store 4x4 accumulators back to memory
+                                                result_ptr[im * p + jm ..][0..4].* = c0;
+                                                result_ptr[(im + 1) * p + jm ..][0..4].* = c1;
+                                                result_ptr[(im + 2) * p + jm ..][0..4].* = c2;
+                                                result_ptr[(im + 3) * p + jm ..][0..4].* = c3;
+                                            }
+                                            // Handle J remainders
+                                            while (jm < j_l1_end) : (jm += 1) {
+                                                var km = k;
+                                                while (km < k_l1_end) : (km += 1) {
+                                                    const b_val = b_ptr[km * p + jm];
+                                                    result_ptr[im * p + jm] += a_ptr[im * n + km] * b_val;
+                                                    result_ptr[(im + 1) * p + jm] += a_ptr[(im + 1) * n + km] * b_val;
+                                                    result_ptr[(im + 2) * p + jm] += a_ptr[(im + 2) * n + km] * b_val;
+                                                    result_ptr[(im + 3) * p + jm] += a_ptr[(im + 3) * n + km] * b_val;
+                                                }
+                                            }
+                                        }
+                                        // Handle I remainders
+                                        while (im < i_l1_end) : (im += 1) {
+                                            var jm = j;
+                                            while (jm < j_l1_end) : (jm += 1) {
+                                                var km = k;
+                                                while (km < k_l1_end) : (km += 1) {
+                                                    result_ptr[im * p + jm] += a_ptr[im * n + km] * b_ptr[km * p + jm];
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
                             }
-                        }
-                    }
-                }
-            }
-        }
-        return;
-    }
-
-    var ii: usize = 0;
-    while (ii < m) : (ii += actual_block_size) {
-        const i_end = @min(ii + actual_block_size, m);
-        var kk: usize = 0;
-        while (kk < n) : (kk += actual_block_size) {
-            const k_end = @min(kk + actual_block_size, n);
-            var jj: usize = 0;
-            while (jj < p) : (jj += actual_block_size) {
-                const tile_width = @min(jj + actual_block_size, p) - jj;
-
-                var i = ii;
-                while (i < i_end) : (i += 1) {
-                    const a_row = a_ptr + i * n;
-                    const result_tile = result_ptr + i * p + jj;
-
-                    var k = kk;
-                    while (k < k_end) : (k += 1) {
-                        const a_val = a_row[k];
-                        const b_tile = b_ptr + k * p + jj;
-
-                        var j: usize = 0;
-                        while (j < tile_width) : (j += 1) {
-                            result_tile[j] += a_val * b_tile[j];
                         }
                     }
                 }
