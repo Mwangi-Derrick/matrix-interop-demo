@@ -35,18 +35,25 @@ pub const CacheLayout = struct {
 };
 
 pub fn suggestBlockSizes(layout: *CacheLayout) void {
-    // L3 block: 60% of L3
-    const l3_usable = (layout.l3_size * 6) / 10;
+    // L3 block: 95% of L3 (register micro-kernel reduces cache pressure)
+    const l3_usable = (layout.l3_size * 95) / 100;
+    //why divide by 12?
+    // 4x4 C tile = 16 floats = 64 bytes
+    // 4x4 B tile = 16 floats = 64 bytes
+    // 4x4 A tile = 16 floats = 64 bytes
+    // Total = 192 bytes
+    // 192 / 64 = 3 cache lines
+    // 3 * 4 = 12
     const l3_raw = @sqrt(@as(f64, @floatFromInt(l3_usable)) / 12.0);
     layout.l3_block = @max(64, (@as(usize, @intFromFloat(l3_raw)) / 8) * 8);
 
-    // L2 block: 60% of L2
-    const l2_usable = (layout.l2_size * 6) / 10;
+    // L2 block: 95% of L2
+    const l2_usable = (layout.l2_size * 95) / 100;
     const l2_raw = @sqrt(@as(f64, @floatFromInt(l2_usable)) / 12.0);
     layout.l2_block = @max(32, (@as(usize, @intFromFloat(l2_raw)) / 8) * 8);
 
-    // L1 block: 50% of L1 (More conservative to avoid thrashing)
-    const l1_usable = (layout.l1_size * 5) / 10;
+    // L1 block: 100% of L1 (4x4 C tile lives in registers, not L1)
+    const l1_usable = (layout.l1_size * 100) / 100;
     const l1_raw = @sqrt(@as(f64, @floatFromInt(l1_usable)) / 12.0);
     layout.l1_block = @max(8, (@as(usize, @intFromFloat(l1_raw)) / 8) * 8);
     
