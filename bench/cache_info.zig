@@ -3,7 +3,6 @@ const builtin = @import("builtin");
 
 pub const common = @import("cache/common.zig");
 pub const CacheLayout = common.CacheLayout;
-pub const suggestBlockSize = common.suggestBlockSize;
 
 const windows = @import("cache/windows.zig");
 const linux = @import("cache/linux.zig");
@@ -28,7 +27,9 @@ pub fn detect(allocator: std.mem.Allocator) !CacheLayout {
         }
     }
     if (layout.l2_size == 0) layout.l2_size = 262144; // 256KB default
-    if (layout.l3_size == 0) layout.l3_size = 8388608; // 8MB default
+    if (layout.l3_size == 0) layout.l3_size = 3 * 1024 * 1024; // 3MB default
+
+    common.suggestBlockSizes(&layout);
 
     return layout;
 }
