@@ -1,7 +1,6 @@
 // rust/matrix.rs
 use std::cmp::min;
 
-const BLOCK_SIZE: usize = 64;
 
 #[no_mangle]
 pub unsafe extern "C" fn rust_matrix_multiply(
@@ -12,21 +11,22 @@ pub unsafe extern "C" fn rust_matrix_multiply(
     _b_rows: usize,
     b_cols: usize,
     result_ptr: *mut f32,
+    block_size: usize,
 ) {
     // Zero out result
     std::ptr::write_bytes(result_ptr, 0, a_rows * b_cols);
 
     // Stage 4: Cache Blocking (Tiling)
-    for ii in (0..a_rows).step_by(BLOCK_SIZE) {
-        for kk in (0..a_cols).step_by(BLOCK_SIZE) {
-            for jj in (0..b_cols).step_by(BLOCK_SIZE) {
+    for ii in (0..a_rows).step_by(block_size) {
+        for kk in (0..a_cols).step_by(block_size) {
+            for jj in (0..b_cols).step_by(block_size) {
                 
-                let i_end = min(ii + BLOCK_SIZE, a_rows);
+                let i_end = min(ii + block_size, a_rows);
                 for i in ii..i_end {
-                    let k_end = min(kk + BLOCK_SIZE, a_cols);
+                    let k_end = min(kk + block_size, a_cols);
                     for k in kk..k_end {
                         let a_val = *a_ptr.add(i * a_cols + k);
-                        let j_end = min(jj + BLOCK_SIZE, b_cols);
+                        let j_end = min(jj + block_size, b_cols);
                         for j in jj..j_end {
                             *result_ptr.add(i * b_cols + j) += a_val * *b_ptr.add(k * b_cols + j);
                         }
