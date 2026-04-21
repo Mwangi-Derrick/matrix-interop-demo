@@ -40,7 +40,7 @@ pub fn build(b: *std.Build) void {
     const zig_obj = b.addObject(.{
         .name = "zig_matrix",
         .root_module = b.createModule(.{
-            .root_source_file = b.path("zig/matrix_stage4.zig"),
+            .root_source_file = b.path("zig/matrix.zig"),
             .target = target,
             .optimize = optimize,
         }),
