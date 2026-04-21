@@ -207,7 +207,7 @@ extern "C" {
 
 **M3**: An interesting reversal — C++ is *slowest* (1,284ms) and Zig is fastest (1,020ms). On M3 with a generic ARM64 target, the C++ compiler's default optimizations were slightly less effective than Zig's aggressive defaults. All three are within 25% of each other — much tighter than on i5.
 
-**Absolute M3 vs i5 ratio**: ~10× faster on M3 for this workload. This comes from the M3's larger caches (128KB L1 vs 32KB), wider execution engine, and higher sustained clock frequency.
+**Absolute M3 vs i5 ratio**: ~10× faster on M3 for this workload. This comes from the M3's larger caches (128KB L1 vs 64KB), wider execution engine, and higher sustained clock frequency.
 
 **The Lesson**: Do not interpret Stage 1 as "Zig is faster than C++ and Rust." Interpret it as "Zig's default optimization profile is more aggressive for this specific workload." Compiler defaults are not equal. This means nothing until we normalize the configurations.
 

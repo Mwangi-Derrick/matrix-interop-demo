@@ -67,8 +67,8 @@ To bridge this gap, CPU architects added a **cache hierarchy** — multiple laye
 │  Storage Layer    │  i5-6300U (Skylake) │  Apple M3           │  Latency    │
 ├───────────────────┼─────────────────────┼─────────────────────┼─────────────┤
 │  CPU Registers    │  ~1 KB per core     │  ~1 KB per core     │  0 cycles   │
-│  L1 Data Cache    │  32 KB per core     │  128 KB per cluster │  ~4 cycles  │
-│  L2 Cache         │  256 KB per core    │  4 MB per cluster   │  ~12 cycles │
+│  L1 Data Cache    │  64 KB per core     │  128 KB per cluster │  ~4 cycles  │
+│  L2 Cache         │  512 KB per core    │  4 MB per cluster   │  ~12 cycles │
 │  L3 Cache (LLC)   │  3 MB shared        │  ~12–24 MB shared   │  ~30 cycles │
 │  RAM (DRAM)       │  varies             │  varies             │  ~100 cycles│
 └─────────────────────────────────────────────────────────────────────────────┘
@@ -344,7 +344,7 @@ On the M3, Stage 3 gave Rust 83ms, C++ 83ms, Zig 89ms — all within 7%. On the 
 
 The M3 differences:
 1. **Wider out-of-order execution**: The M3 can track many more in-flight instructions simultaneously, allowing it to hide latencies between instructions that trip up the narrower Skylake pipeline.
-2. **Larger L1/L2**: The M3's 128KB L1 (vs. Skylake's 32KB) means more of the working set fits in the fastest cache. Differences in code quality that manifest as extra loads on i5 are invisible on M3 because everything is in L1 anyway.
+2. **Larger L1/L2**: The M3's 128KB L1 (vs. Skylake's 64KB) means more of the working set fits in the fastest cache. Differences in code quality that manifest as extra loads on i5 are invisible on M3 because everything is in L1 anyway.
 3. **Better branch prediction**: The M3's more sophisticated branch predictor makes the loop overhead in less-optimized code less costly.
 
 The lesson: **a more powerful CPU makes it easier to write code that "accidentally" performs well.** This is dangerous. Code that seems equally fast across languages on an M3 may be 2× different on a Skylake server in your production cluster.
