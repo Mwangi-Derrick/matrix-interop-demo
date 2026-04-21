@@ -10,14 +10,14 @@ extern fn rust_matrix_multiply(
     a_ptr: [*]f32, a_rows: usize, a_cols: usize,
     b_ptr: [*]f32, b_rows: usize, b_cols: usize,
     result_ptr: [*]f32,
-    block_size: usize
+    l1_block: usize, l2_block: usize, l3_block: usize
 ) void;
 
 extern fn zig_matrix_multiply(
     a_ptr: [*]f32, a_rows: usize, a_cols: usize,
     b_ptr: [*]f32, b_rows: usize, b_cols: usize,
     result_ptr: [*]f32,
-    block_size: usize
+    l1_block: usize, l2_block: usize, l3_block: usize
 ) void;
 
 const Impl = enum {
@@ -44,14 +44,14 @@ fn runOnce(
     result_zig: []f32,
     result_rust: []f32,
     result_cpp: []f32,
-    block_size: usize
+    l1_block: usize, l2_block: usize, l3_block: usize
 ) !u64 {
     var timer = try std.time.Timer.start();
 
     switch (impl) {
-        .cpp => c.cpp_matrix_multiply(a.ptr, m, n, b.ptr, n, p, result_cpp.ptr, block_size),
-        .rust => rust_matrix_multiply(a.ptr, m, n, b.ptr, n, p, result_rust.ptr, block_size),
-        .zig => zig_matrix_multiply(a.ptr, m, n, b.ptr, n, p, result_zig.ptr, block_size),
+        .cpp => c.cpp_matrix_multiply(a.ptr, m, n, b.ptr, n, p, result_cpp.ptr, l1_block, l2_block, l3_block),
+        .rust => rust_matrix_multiply(a.ptr, m, n, b.ptr, n, p, result_rust.ptr, l1_block, l2_block, l3_block),
+        .zig => zig_matrix_multiply(a.ptr, m, n, b.ptr, n, p, result_zig.ptr, l1_block, l2_block, l3_block),
     }
 
     return timer.read();
@@ -81,12 +81,15 @@ fn verifyResults(result_zig: []const f32, result_rust: []const f32, result_cpp: 
 pub fn main() !void {
     const allocator = std.heap.page_allocator;
 
-    // Detect CPU cache layout on the host device(windows/linux/macos) and suggest block size
+    // Detect CPU cache layout on the host device(windows/linux/macos) and suggest block sizes
     const cache_layout = try cache_info.detect(allocator);
-    const block_size = cache_info.suggestBlockSize(cache_layout, f32);
 
     std.debug.print("{any}\n", .{cache_layout});
-    std.debug.print("Suggested Block Size: {}\n", .{block_size});
+    std.debug.print("Hierarchical Blocks: L1={}, L2={}, L3={}\n", .{
+        cache_layout.l1_block,
+        cache_layout.l2_block,
+        cache_layout.l3_block,
+    });
 
     const m: usize = 1024;
     const n: usize = 1024;
@@ -114,7 +117,7 @@ pub fn main() !void {
     // setup a warmup order 
     const warmup_order = [_]Impl{ .cpp, .rust, .zig };
     for (warmup_order) |impl| {
-        _ = try runOnce(impl, a, m, n, b, p, result_zig, result_rust, result_cpp, block_size);
+        _ = try runOnce(impl, a, m, n, b, p, result_zig, result_rust, result_cpp, cache_layout.l1_block, cache_layout.l2_block, cache_layout.l3_block);
     }
     
     //benchmarking logic, previous version didnt give a fair advantage to a binary run at first now we run all orders first, 
@@ -127,7 +130,7 @@ pub fn main() !void {
 
     for (0..rounds) |round| {
         for (order[round % order.len]) |impl| {
-            const elapsed = try runOnce(impl, a, m, n, b, p, result_zig, result_rust, result_cpp, block_size);
+            const elapsed = try runOnce(impl, a, m, n, b, p, result_zig, result_rust, result_cpp, cache_layout.l1_block, cache_layout.l2_block, cache_layout.l3_block);
 
             switch (impl) {
                 .cpp => benchmark.cpp_ns[round] = elapsed,
