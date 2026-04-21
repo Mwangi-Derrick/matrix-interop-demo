@@ -1,6 +1,8 @@
 const std = @import("std");
 const common = @import("common.zig");
 
+const win32 = std.os.windows;
+
 const RelationCache = 2;
 const PROCESSOR_CACHE_TYPE = enum(c_int) {
     Unified = 0,
@@ -18,34 +20,54 @@ const CACHE_DESCRIPTOR = extern struct {
 };
 
 const SYSTEM_LOGICAL_PROCESSOR_INFORMATION = extern struct {
-    ProcessorMask: u32,
+    ProcessorMask: usize,
     Relationship: u32,
-    Cache: CACHE_DESCRIPTOR,
+    Payload: extern union {
+        ProcessorCore: extern struct {
+            Flags: u8,
+        },
+        NumaNode: extern struct {
+            NodeNumber: u32,
+        },
+        Cache: CACHE_DESCRIPTOR,
+        Reserved: [2]u64,
+    },
 };
+
+extern "kernel32" fn GetLogicalProcessorInformation(
+    Buffer: ?[*]SYSTEM_LOGICAL_PROCESSOR_INFORMATION,
+    ReturnedLength: *win32.DWORD,
+) callconv(std.builtin.CallingConvention.winapi) win32.BOOL;
 
 pub fn detect(allocator: std.mem.Allocator) !common.CacheLayout {
     var layout = common.CacheLayout{ .source = "Windows API" };
     
-    const win32 = std.os.windows;
     var buffer_size: win32.DWORD = 0;
-    _ = win32.kernel32.GetLogicalProcessorInformation(null, &buffer_size);
+    _ = GetLogicalProcessorInformation(null, &buffer_size);
     
     if (buffer_size > 0) {
-        const buffer = try allocator.alloc(u8, buffer_size);
+        const num_elements = buffer_size / @sizeOf(SYSTEM_LOGICAL_PROCESSOR_INFORMATION);
+        const buffer = try allocator.alloc(SYSTEM_LOGICAL_PROCESSOR_INFORMATION, num_elements);
         defer allocator.free(buffer);
         
-        if (win32.kernel32.GetLogicalProcessorInformation(@ptrCast(buffer.ptr), &buffer_size) != 0) {
-            const info_ptr = @as([*]SYSTEM_LOGICAL_PROCESSOR_INFORMATION, @ptrCast(buffer.ptr));
-            for (0..buffer_size / @sizeOf(SYSTEM_LOGICAL_PROCESSOR_INFORMATION)) |i| {
-                const info = info_ptr[i];
+        if (GetLogicalProcessorInformation(buffer.ptr, &buffer_size) != 0) {
+            for (buffer) |info| {
                 if (info.Relationship == RelationCache) {
-                    switch (info.Cache.Level) {
-                        1 => layout.l1_size = info.Cache.Size,
-                        2 => layout.l2_size = info.Cache.Size,
-                        3 => layout.l3_size = info.Cache.Size,
+                    const cache = info.Payload.Cache;
+                    switch (cache.Level) {
+                        1 => {
+                            // Only take data cache or unified cache for L1
+                            if (cache.Type == .Data or cache.Type == .Unified) {
+                                layout.l1_size = cache.Size;
+                            }
+                        },
+                        2 => layout.l2_size = cache.Size,
+                        3 => layout.l3_size = cache.Size,
                         else => {},
                     }
-                    layout.line_size = info.Cache.LineSize;
+                    if (cache.LineSize > 0) {
+                        layout.line_size = cache.LineSize;
+                    }
                 }
             }
         }
