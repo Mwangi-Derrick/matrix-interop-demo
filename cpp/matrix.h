@@ -12,7 +12,7 @@ void cpp_matrix_multiply(
     const float* a_ptr, size_t a_rows, size_t a_cols,
     const float* b_ptr, size_t b_rows, size_t b_cols,
     float* result_ptr,
-    size_t block_size
+    size_t l1_block, size_t l2_block, size_t l3_block
 );
 
 void cpp_matrix_add(
