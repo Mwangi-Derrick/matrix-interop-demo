@@ -555,15 +555,16 @@ Tiling's overhead (6 nested loops, min() calls, more complex pointer arithmetic)
 |:---|:---|:---:|:---:|:---:|
 | 1 | Naive (i,j,k) — default flags | 10,414ms | 12,826ms | 12,820ms |
 | 2 | Naive (i,j,k) — normalized flags | 13,466ms | 12,685ms | 10,671ms |
-| 3 | Optimized (i,k,j) — normalized flags | 865ms | 785ms | **419ms** |
-| 4 | Tiled 64×64 (i,k,j) — normalized flags | 1,367ms | **647ms** | 401ms |
+| 3 | Optimized (i,k,j) — normalized flags | 865ms | 785ms | 419ms |
+| 4 | Tiled 64×64 (i,k,j) — normalized flags | 1,367ms | 647ms | 401ms |
+| **5** | **Hierarchical funnel + SIMD µ-kernel** | **135ms** | **135ms** | **152ms** |
 
 **Best result per language (i5)**:
-- C++: **401ms** (Stage 4)
-- Rust: **647ms** (Stage 4)
-- Zig: **865ms** (Stage 3 — tiling regressed it)
+- Zig: **135ms** (Stage 5 — **77× from Stage 1**)
+- Rust: **135ms** (Stage 5 — **95× from Stage 1**)
+- C++: **152ms** (Stage 5 — **84× from Stage 1**)
 
-**Speedup from Stage 1 to best**: C++ 32×, Rust 19.8×, Zig 12×
+**All three languages within 12% of each other.** The performance gap that existed from Stages 1–4 has collapsed.
 
 ### Apple M3 (aarch64-apple-darwin)
 
@@ -571,25 +572,21 @@ Tiling's overhead (6 nested loops, min() calls, more complex pointer arithmetic)
 |:---|:---|:---:|:---:|:---:|
 | 1 | Naive (i,j,k) — default flags | 1,020ms | 1,081ms | 1,284ms |
 | 2 | Naive (i,j,k) — normalized flags | 1,026ms | 1,084ms | 1,263ms |
-| 3 | Optimized (i,k,j) — normalized flags | **89ms** | **83ms** | **83ms** |
+| 3 | Optimized (i,k,j) — normalized flags | 89ms | 83ms | 83ms |
 | 4 | Tiled 64×64 — normalized flags | 144ms | 126ms | 119ms |
+| **5** | **Hierarchical funnel + SIMD µ-kernel** | *pending* | *pending* | *pending* |
 
-**Best result per language (M3)**:
-- C++: **83ms** (Stage 3 — tiling regressed it)
-- Rust: **83ms** (Stage 3 — tiling regressed it)
-- Zig: **89ms** (Stage 3 — tiling regressed it)
+*Stage 5 results on M3 are pending cross-platform validation.*
 
-**Speedup from Stage 1 to best**: C++ 15×, Rust 13×, Zig 11×
+### Cross-Architecture Speedup Ratios (Stage 1 → Stage 5, i5-6300U)
 
-### Cross-Architecture Speedup Ratios (Stage 1 → Stage 3)
-
-| Language | i5-6300U ratio | M3 ratio | Ratio consistency |
+| Language | Stage 1→3 ratio | Stage 1→5 ratio | Stage 4→5 ratio |
 |:---|:---:|:---:|:---:|
-| Zig | 12.0× | 11.5× | ✅ Similar |
-| Rust | 16.3× | 13.0× | ✅ Same order of magnitude |
-| C++ | 30.6× | 15.5× | ⚠️ C++ benefited more from flags on x86 (AVX2) |
+| Zig | 12.0× | **77×** | **10.1×** |
+| Rust | 16.3× | **95×** | **4.8×** |
+| C++ | 30.6× | **84×** | **2.6×** |
 
-The ratios are consistent across architectures, confirming that the loop-reorder improvement is a cache-physics phenomenon, not a platform-specific artifact. The C++ discrepancy is explained by C++'s AVX2 vectorization benefit being larger on x86 (8-wide) than Neon on ARM64 (4-wide in the base ASIMD implementation).
+Stage 5's impact is most dramatic for Zig — the language that suffered the worst Stage 4 regression (+58%) now achieves the best absolute time. This confirms the thesis: **explicit SIMD eliminates the auto-vectorizer as a variable.**
 
 ---
 
@@ -614,46 +611,138 @@ The ratios are consistent across architectures, confirming that the loop-reorder
 
 ---
 
-## Next Measurements — Proposed Stage 5
+## Stage 5 — Hierarchical Cache Funnel + Register SIMD Micro-kernel
 
-The key open question after Stage 4: **is Zig's Stage 4 regression fixable without switching to explicit SIMD intrinsics?**
+### What Changed
 
-A proposed Stage 5 would use Zig's `comptime` to generate tile loops with fixed, statically-known trip counts, bypassing the `@min()` runtime bound:
+Three fundamental changes, applied to all three languages simultaneously:
 
-```zig
-// Proposed: compile-time known block bounds
-comptime { assert(MATRIX_DIM % BLOCK_SIZE == 0); } // enforce divisibility
+1. **Hierarchical cache blocking** — replaced the single 64×64 tile with a 3-level funnel: L3 → L2 → L1. Block sizes are computed at runtime from the host CPU's actual cache sizes (detected via OS APIs).
 
-// Then inner loops have statically known trip count
-for (0..BLOCK_SIZE) |bi| { ... }  // BLOCK_SIZE is comptime-known = 64
-```
+2. **4×4 register micro-kernel** — the innermost computation unit processes a 4×4 tile of C using 4 SIMD vector registers. This removes 16 elements of C from the cache hierarchy entirely — they live in CPU registers for the duration of the k-loop.
 
-If the matrix dimension is known at compile time to be evenly divisible by `BLOCK_SIZE`, the `@min()` bound check disappears. LLVM can prove the loop count is exactly 64, and vectorization should succeed.
+3. **Explicit SIMD vectors** — bypassed LLVM's auto-vectorizer entirely. Zig uses `@Vector(4, f32)`, C++ uses `__attribute__((vector_size(16)))`, and Rust uses unrolled scalar code with `__restrict`-equivalent aliasing guarantees.
 
-Alternatively, Stage 6 would use explicit Zig `@Vector` types to force vectorization regardless of LLVM's auto-vectorization analysis:
+### Why This Solves Stage 4's Regression
+
+Stage 4's regression was caused by LLVM's auto-vectorizer failing to analyze the `@min()` bounded while-loops. Stage 5 eliminates the auto-vectorizer as a variable by writing the SIMD operations explicitly:
 
 ```zig
-const Vec8f32 = @Vector(8, f32);
-var acc = @splat(@as(f32, 0));
-// explicit 8-wide accumulation
+// Stage 4 (broken): relies on auto-vectorizer
+while (j < @min(jj + BLOCK_SIZE, p)) : (j += 1) {
+    result_ptr[i * p + j] += a_val * b_ptr[k * p + j];
+}
+
+// Stage 5 (fixed): explicit SIMD, no auto-vectorization needed
+const b_vec: @Vector(4, f32) = b_row[jj..][0..4].*;
+c_row0 += @as(@Vector(4, f32), @splat(a_ptr[i * n + kk + 0])) * b_vec;
 ```
+
+### Cache Utilization Strategy
+
+The micro-kernel's 4×4 C tile lives entirely in registers, freeing L1 for A and B data exclusively. This enabled aggressive cache fill percentages:
+
+| Cache Level | Stage 4 (implied) | Stage 5 |
+|:---|:---:|:---:|
+| L1 (32 KB) | ~40% (64×64 = 49 KB, overflows) | **100%** (C tile in registers) |
+| L2 (256 KB) | N/A (single-level) | **95%** |
+| L3 (3 MB) | N/A (single-level) | **95%** |
+
+Runtime-detected block sizes on i5-6300U: `L1=48, L2=144, L3=496`.
+
+### The Code
+
+**Zig** (`zig/matrix_stage5.zig`) — 4×4 register micro-kernel with `@Vector(4, f32)`:
+```zig
+// Innermost micro-kernel: processes a 4×4 C tile using 4 SIMD registers
+var c_row0: @Vector(4, f32) = c_row_slice0[0..4].*;
+var c_row1: @Vector(4, f32) = c_row_slice1[0..4].*;
+var c_row2: @Vector(4, f32) = c_row_slice2[0..4].*;
+var c_row3: @Vector(4, f32) = c_row_slice3[0..4].*;
+
+var kk = k_start;
+while (kk < k_end) : (kk += 1) {
+    const b_vec: @Vector(4, f32) = b_row[kk * p + j_start ..][0..4].*;
+    c_row0 += @as(@Vector(4, f32), @splat(a_ptr[i0 * n + kk])) * b_vec;
+    c_row1 += @as(@Vector(4, f32), @splat(a_ptr[i1 * n + kk])) * b_vec;
+    c_row2 += @as(@Vector(4, f32), @splat(a_ptr[i2 * n + kk])) * b_vec;
+    c_row3 += @as(@Vector(4, f32), @splat(a_ptr[i3 * n + kk])) * b_vec;
+}
+// Write back from registers to memory (4 stores, not 16)
+c_row_slice0[0..4].* = c_row0;
+c_row_slice1[0..4].* = c_row1;
+c_row_slice2[0..4].* = c_row2;
+c_row_slice3[0..4].* = c_row3;
+```
+
+**C++** (`cpp/matrix_stage5.cpp`) — vector extensions with `__restrict`:
+```cpp
+typedef float v4f __attribute__((vector_size(16)));
+
+// The __restrict qualifier tells the compiler that a_ptr, b_ptr,
+// and result_ptr do NOT alias each other. Without this, the compiler
+// cannot keep values in registers across iterations.
+void cpp_matrix_multiply(
+    const float* __restrict a_ptr, ...,
+    float* __restrict result_ptr, ...) {
+
+    v4f c00, c10, c20, c30;
+    // ... load C tile from memory into vector registers
+    for (size_t kk = k_start; kk < k_end; ++kk) {
+        v4f b_vec = *(const v4f*)&b_ptr[kk * b_cols + j_start];
+        v4f a0 = {a_val0, a_val0, a_val0, a_val0};
+        c00 += a0 * b_vec;
+        // ... repeat for c10, c20, c30
+    }
+}
+```
+
+**Rust** (`rust/src/matrix_stage5.rs`) — unrolled scalar with LLVM aliasing guarantees:
+```rust
+// Rust's ownership model guarantees no aliasing between a_ptr, b_ptr, result_ptr.
+// LLVM leverages this to keep accumulators in registers.
+let mut c00 = *result_ptr.add(i0 * b_cols + j_start + 0);
+// ... load 16 C values into local variables (registers)
+for kk in k_start..k_end {
+    let b0 = *b_ptr.add(kk * b_cols + j_start + 0);
+    // ... FMA across 4 rows × 4 columns
+    c00 += a_val_i0 * b0;
+}
+*result_ptr.add(i0 * b_cols + j_start + 0) = c00;
+```
+
+### Results
+
+| Language | i5 Stage 4 | i5 Stage 5 | Delta | Speedup |
+|:---:|:---:|:---:|:---:|:---:|
+| **Zig** | 1,367ms | **135ms** | **-90%** | **10.1×** |
+| **Rust** | 647ms | **135ms** | **-79%** | **4.8×** |
+| **C++** | 401ms | **152ms** | **-62%** | **2.6×** |
+
+### Analysis
+
+**Zig**: The most dramatic improvement in the entire project. From worst performer at 1,367ms (Stage 4 auto-vectorization failure) to **fastest** at 135ms. The explicit `@Vector(4, f32)` bypassed the auto-vectorizer entirely, and the hierarchical cache funnel eliminated L3 cache thrashing. **10× speedup from a code-level fix, not a flags fix.**
+
+**Rust**: Strong improvement from 647ms to 135ms. Rust's strict ownership model (no pointer aliasing by construction) meant LLVM could keep the 16 C-tile accumulators in registers without needing explicit SIMD types — though the code was carefully unrolled to hint at register promotion.
+
+**C++**: Improved from 401ms to 152ms. C++ required `__restrict` on all three pointer parameters to achieve register promotion. Without `__restrict`, the compiler must assume that writing to `result_ptr` might modify data pointed to by `a_ptr` or `b_ptr`, forcing it to re-load values from memory on every iteration.
+
+**Convergence**: All three languages are now within **12% of each other** (135–152ms). Compare to Stage 4 where the gap was **3.4×** (401ms to 1,367ms). The explicit micro-kernel eliminated the compiler as a performance variable — the same hardware physics dominates equally in all three languages.
+
+**The Lesson**: When compiler auto-vectorization fails (as it did for all three languages to varying degrees in Stage 4's complex loop nest), the fix is not better flags or compiler hints. The fix is **writing the SIMD operations yourself**. Every systems language provides this capability: Zig's `@Vector`, Rust's `std::arch` / unrolled scalars, C++'s vector extensions / intrinsics. Taking control of the innermost loop's register usage is the single most impactful optimization available after the access pattern is correct.
 
 ---
 
-```bash
-# Emit assembly for Zig
-zig build-exe -femit-asm=bench.asm bench/bench.zig
+## Next Measurements — Future Stages
 
-# Compare SIMD register usage: ymm (AVX2) vs xmm (SSE2) vs no vector registers
-grep -c "ymm" bench.asm    # Count AVX2 vector instructions
-grep -c "vfmadd" bench.asm # Count FMA instructions
-```
-
-**Stage 6: Explicit SIMD Intrinsics (Zig)**
+**Stage 6: Matrix Packing**
+Copy tiles into contiguous memory buffers before computation to eliminate TLB misses and guarantee perfect cache line alignment:
 ```zig
-// Using Zig's @Vector type to force AVX2 vectorization
-const Vec8f32 = @Vector(8, f32);
-// ... explicit 8-wide vector operations
+// Pack B tile into contiguous buffer (no stride in the packed copy)
+var pack_b: [BLOCK * BLOCK]f32 = undefined;
+for (0..tile_k) |tk| {
+    @memcpy(pack_b[tk * tile_j..][0..tile_j], b_ptr[kk + tk * p + jj..][0..tile_j]);
+}
 ```
 
 **Stage 7: Parallelism**
@@ -668,6 +757,7 @@ const thread_count = std.Thread.getCpuCount() catch 1;
 - Node.js via `node-ffi-napi`
 
 ---
+
 ## 🧠 Benchmark Variance & Cache Effects (Important Insight)
 
 During repeated benchmarking runs, performance results vary significantly even when the code and inputs remain unchanged.

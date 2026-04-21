@@ -513,8 +513,148 @@ if (target.result.os.tag == .windows) {
 This explicitness is a feature, not a bug. It forces you to understand your complete dependency graph — something that matters enormously in production systems where unexpected DLL dependencies can cause deployment failures.
 
 ---
+## Part 8: The Register Micro-kernel — Taking Control of the Hardware
 
-## Part 7: The Mental Models You Now Own
+### 8.1 — Why Auto-Vectorization Failed
+
+Stage 4 revealed a fundamental limitation: LLVM's auto-vectorizer could not analyze the tiled loop structure. The `@min()` runtime bounds, the `while` loop construct, and the 6-level nesting depth exceeded the optimizer's analysis budget. The vectorizer gave up and emitted scalar code.
+
+This manifested identically across architectures: Zig regressed by ~60% on both x86_64 and ARM64. The failure was in the compiler's optimizer, not the hardware.
+
+The fix is not better flags. The fix is not simpler loops. The fix is: **write the SIMD operations yourself**.
+
+### 8.2 — The 4×4 Register Micro-kernel Architecture
+
+The key insight from the BLAS (Basic Linear Algebra Subprograms) literature: the innermost computation unit should be a small fixed-size tile that lives entirely in CPU registers.
+
+For a 4×4 micro-kernel:
+- **C tile**: 4 rows × 4 columns = 16 floats → 4 SIMD registers (4 floats each)
+- **B vector**: 1 row × 4 columns = 4 floats → 1 SIMD register
+- **A values**: 4 scalars (one per row of C) → broadcast into SIMD registers
+
+```
+Register layout for one micro-kernel invocation:
+
+    B vector (loaded once per k):
+    ┌─────────────────────────┐
+    │ B[k,j] B[k,j+1] B[k,j+2] B[k,j+3] │  → 1 SIMD register
+    └─────────────────────────┘
+
+    C tile (4 SIMD registers, accumulated across all k):
+    ┌─────────────────────────┐
+    │ C[i,j]   C[i,j+1]   C[i,j+2]   C[i,j+3]   │  → xmm0 / v0
+    │ C[i+1,j] C[i+1,j+1] C[i+1,j+2] C[i+1,j+3] │  → xmm1 / v1
+    │ C[i+2,j] C[i+2,j+1] C[i+2,j+2] C[i+2,j+3] │  → xmm2 / v2
+    │ C[i+3,j] C[i+3,j+1] C[i+3,j+2] C[i+3,j+3] │  → xmm3 / v3
+    └─────────────────────────┘
+
+    For each k iteration:
+      b_vec = load B[k, j..j+3]                    // 1 memory load
+      c_row0 += broadcast(A[i, k]) * b_vec          // FMA: no memory load for C!
+      c_row1 += broadcast(A[i+1, k]) * b_vec        // reuse b_vec from register
+      c_row2 += broadcast(A[i+2, k]) * b_vec        // reuse b_vec from register
+      c_row3 += broadcast(A[i+3, k]) * b_vec        // reuse b_vec from register
+```
+
+**Memory traffic per k iteration**: 1 B-vector load (4 floats) + 4 A-scalar loads = **20 bytes**. Compare to scalar code which loads 4 B values + 4 A values + 16 C values = **96 bytes per k iteration**. The micro-kernel reduces memory traffic by **5×** by keeping C in registers.
+
+### 8.3 — Explicit SIMD Across Three Languages
+
+Each language provides different mechanisms for expressing the same register-level operation:
+
+**Zig** — `@Vector(4, f32)`:
+```zig
+const b_vec: @Vector(4, f32) = b_row[kk * p + j_start ..][0..4].*;
+c_row0 += @as(@Vector(4, f32), @splat(a_ptr[i0 * n + kk])) * b_vec;
+```
+Zig's `@Vector` is a first-class type. `@splat` broadcasts a scalar into all lanes. LLVM maps this directly to SSE/AVX on x86 or NEON on ARM. No intrinsics needed.
+
+**C++** — `__attribute__((vector_size(16)))`:
+```cpp
+typedef float v4f __attribute__((vector_size(16)));
+v4f b_vec = *(const v4f*)&b_ptr[kk * b_cols + j_start];
+v4f a_broadcast = {a_val, a_val, a_val, a_val};
+c_row0 += a_broadcast * b_vec;
+```
+GCC/Clang vector extensions provide operator overloading for SIMD vectors. The critical addition is `__restrict` on pointers — without it, the compiler cannot prove that the C-tile register values remain valid after stores.
+
+**Rust** — unrolled scalars with aliasing guarantees:
+```rust
+let a_val = *a_ptr.add(i0 * a_cols + kk);
+let b0 = *b_ptr.add(kk * b_cols + j_start + 0);
+let b1 = *b_ptr.add(kk * b_cols + j_start + 1);
+let b2 = *b_ptr.add(kk * b_cols + j_start + 2);
+let b3 = *b_ptr.add(kk * b_cols + j_start + 3);
+c00 += a_val * b0; c01 += a_val * b1;
+c02 += a_val * b2; c03 += a_val * b3;
+```
+Rust doesn't need explicit vector types because its ownership model guarantees no aliasing between `a_ptr`, `b_ptr`, and `result_ptr`. LLVM trusts Rust's `noalias` annotations and promotes the 16 local accumulator variables into SIMD registers.
+
+### 8.4 — The Hierarchical Cache Funnel
+
+Stage 4 used a single tiling level. Stage 5 uses three levels that map to the physical cache hierarchy:
+
+```
+Data flow: RAM → L3 → L2 → L1 → Registers
+
+┌─────────────────────────────────────────────────────────┐
+│ L3 Loop (block = 496 on i5-6300U)                       │
+│   ┌─────────────────────────────────────────────────┐   │
+│   │ L2 Loop (block = 144)                           │   │
+│   │   ┌─────────────────────────────────────────┐   │   │
+│   │   │ L1 Loop (block = 48)                    │   │   │
+│   │   │   ┌─────────────────────────────────┐   │   │   │
+│   │   │   │ Register Micro-kernel (4×4)     │   │   │   │
+│   │   │   │ 16 C values in SIMD registers   │   │   │   │
+│   │   │   │ No L1 pressure from C tile      │   │   │   │
+│   │   │   └─────────────────────────────────┘   │   │   │
+│   │   └─────────────────────────────────────────┘   │   │
+│   └─────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────┘
+```
+
+Block sizes are computed at runtime from the host CPU's actual cache sizes. The formula:
+
+```
+block = sqrt(cache_size × utilization_percent / (3 × sizeof(f32)))
+```
+
+The divisor of 3 accounts for the three working matrices (A tile, B tile, C tile — though in Stage 5, C is in registers, allowing higher utilization percentages).
+
+| Cache Level | i5-6300U size | Utilization | Block Size |
+|:---|:---:|:---:|:---:|
+| L1 | 32 KB | 100% | 48 |
+| L2 | 256 KB | 95% | 144 |
+| L3 | 3 MB | 95% | 496 |
+
+The 100% L1 utilization is safe because the C tile lives in registers, not L1. Only A and B tiles compete for L1 space.
+
+### 8.5 — The `__restrict` Story in C++
+
+C++ pointers can legally alias — `result_ptr[0]` might be the same memory location as `a_ptr[0]`. The compiler must conservatively assume this unless told otherwise.
+
+Without `__restrict`:
+```cpp
+// Compiler must reload a_val after every store to result_ptr
+// because the store MIGHT have modified a_ptr's data
+result_ptr[i * b_cols + j] += a_val * b_vec;
+// ↑ This store invalidates all loads from a_ptr and b_ptr
+```
+
+With `__restrict`:
+```cpp
+void cpp_matrix_multiply(
+    const float* __restrict a_ptr, ...,
+    float* __restrict result_ptr, ...)
+// Now the compiler KNOWS stores to result_ptr cannot affect a_ptr or b_ptr
+// It can keep a_val and c_rows in registers across iterations
+```
+
+This is why C++ was the hardest to optimize to parity with Zig and Rust. Zig's `[*]const f32` provides similar aliasing guarantees by default (const pointers cannot alias mutable pointers). Rust's ownership model makes aliasing impossible by construction.
+
+---
+
+## Part 9: The Mental Models You Now Own
 
 After working through this document, you should be able to reason from these models without looking anything up.
 
@@ -536,6 +676,9 @@ The Stage 4 Zig regression was +58% on x86_64 and +62% on ARM64. Cache miss impr
 ### Model 6: Measure, Then Optimize. Then Measure Again.
 Cache blocking is a textbook optimization from the BLAS literature. On the i5, it helped C++ and Rust. On the M3, it hurt all three. The "correct" optimization depends on the target hardware's cache size. There is no universal answer. Measure on your target, not on your development machine.
 
+### Model 7: When the Auto-Vectorizer Fails, Write the SIMD Yourself
+The auto-vectorizer is a heuristic system with a finite analysis budget. Complex loop nests, runtime-computed bounds, and potential aliasing exhaust that budget. When this happens, the fix is not better flags or simpler code structure — it is **explicit SIMD**. Every systems language provides this capability. A 4×4 register micro-kernel transforms the innermost loop from "please vectorize this" to "execute these vector instructions." The compiler becomes a translator, not an optimizer. Stage 5 proved this: the language that suffered the worst auto-vectorization failure (Zig, +58% regression in Stage 4) became the fastest (135ms) once SIMD was made explicit.
+
 ---
 
-*Grounded in benchmark data from an Intel Core i5-6300U (Skylake, 2015) running Windows/MSYS2, and an Apple M3 (ARM64, 2024) running macOS. All source code, flags, and results are documented in PERFORMANCE_LOG.md. The automated stage runner (`run_benchmark_stages.sh`) allows anyone to reproduce all measurements from scratch.*
+*Grounded in benchmark data from an Intel Core i5-6300U (Skylake, 2015) running Windows/MSYS2, and an Apple M3 (ARM64, 2024) running macOS. All source code, flags, and results are documented in PERFORMANCE_LOG.md. The automated stage runner (`run_benchmark_stages.sh`) allows anyone to reproduce all measurements from scratch. Each stage has immutable kernel snapshots for all three languages — no git archaeology needed.*
