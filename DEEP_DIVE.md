@@ -67,7 +67,7 @@ To bridge this gap, CPU architects added a **cache hierarchy** — multiple laye
 │  Storage Layer    │  i5-6300U (Skylake) │  Apple M3           │  Latency    │
 ├───────────────────┼─────────────────────┼─────────────────────┼─────────────┤
 │  CPU Registers    │  ~1 KB per core     │  ~1 KB per core     │  0 cycles   │
-│  L1 Data Cache    │  64 KB per core     │  128 KB per cluster │  ~4 cycles  │
+│  L1 Data Cache    │  32 KB per core     │  128 KB per cluster │  ~4 cycles  │
 │  L2 Cache         │  256 KB per core    │  4 MB per cluster   │  ~12 cycles │
 │  L3 Cache (LLC)   │  3 MB shared        │  ~12–24 MB shared   │  ~30 cycles │
 │  RAM (DRAM)       │  varies             │  varies             │  ~100 cycles│
@@ -317,6 +317,30 @@ for (0..p) |j| {
 - Repeat 128 times (1024 / 8).
 
 **8× fewer iterations. 8× fewer instructions.** This is where C++'s 400ms on the i5 comes from vs. pure scalar code's theoretical ~3,200ms.
+
+<div align="center">
+
+# ⚡ SIMD Matrix Multiplication: A Cache-Aware Tiling Strategy
+
+### From RAM → L3 → L2 → L1 → Registers
+
+</div>
+
+Think of it as a funnel. You start with the massive data in RAM and move it into progressively smaller, faster "rooms." To keep the CPU from waiting, you tile from the outside in — starting with the largest cache.
+
+## The Correct Tiling Order
+
+### Outer Loops (L3 Tiling)
+You grab a massive chunk of the matrices that fits into the L3 cache (shared by all cores).
+
+### Middle Loops (L2 Tiling)
+You break that L3 chunk into smaller blocks that fit into a single core's L2 cache.
+
+### Inner Loops (L1 Tiling)
+You break the L2 block down further into tiles that fit into the L1 cache (the fastest "hot" memory).
+
+### The "Kernel" (Registers)
+This is the innermost part where you use SIMD intrinsics. You load your **micro-panels** (or **macro-panels**) into Registers to perform the actual FMAs(Fuse Multiply-Adds).
 
 ### 4.2 — Why `-ffast-math` Is the Key
 
