@@ -53,17 +53,18 @@ That reproducibility is the point. **The physics of cache lines does not care wh
 
 ## The Core Finding — In One Table
 
-1024×1024 × 1024×1024 matrix multiplication (~2.1 billion FLOPs):
+1024×1024 × 1024×1024 matrix multiplication (~2.1 billion FLOPs).
+Results from `run_benchmark_stages.sh` (median of 5 runs, sequential, reproducible):
 
-| Stage | Algorithm | i5-6300U Zig | i5-6300U Rust | i5-6300U C++ | M3 Zig | M3 Rust | M3 C++ |
+| Stage | Algorithm | i5-6300U Zig | i5-6300U Rust | i5-6300U C++ | CI Runner Zig | CI Runner Rust | CI Runner C++ |
 |:---|:---|:---:|:---:|:---:|:---:|:---:|:---:|
-| **1** | Naive `(i,j,k)` | 10,414ms | 12,826ms | 12,820ms | 1,020ms | 1,081ms | 1,284ms |
-| **2** | Flags standardized | 13,466ms | 12,685ms | 10,671ms | 1,026ms | 1,084ms | 1,263ms |
-| **3** | Loop flip `(i,k,j)` | 865ms | 785ms | 419ms | 89ms | 83ms | 83ms |
-| **4** | 64×64 tiling | 1,367ms | 647ms | 401ms | 144ms | 126ms | 119ms |
-| **5** | **Hierarchical funnel + SIMD µ-kernel** | **135ms** | **135ms** | **152ms** | *pending* | *pending* | *pending* |
+| **1** | Naive `(i,j,k)` | 7,911ms | 7,986ms | 8,454ms | 7,353ms | 5,346ms | 7,464ms |
+| **2** | Flags standardized | 8,943ms | 8,650ms | 9,498ms | 7,915ms | 5,561ms | 8,049ms |
+| **3** | Loop flip `(i,k,j)` | 273ms | 245ms | **232ms** | **62ms** | **62ms** | **70ms** |
+| **4** | Dynamic tiling | **226ms** | **218ms** | **208ms** | 171ms | 166ms | 172ms |
+| **5** | Hierarchical + 4×4 SIMD | 274ms | 380ms | 317ms | 198ms | 212ms | 217ms |
 
-**Read Stage 5 carefully.** All three languages converged to within 12% of each other — 135ms for Zig and Rust, 152ms for C++. This is a **77–95× speedup from Stage 1** achieved through five incremental changes: access pattern (12×), cache blocking (2×), hierarchical tiling (3×), and explicit SIMD micro-kernels (3×). The hierarchy compounds.
+**Read Stages 3→4→5 carefully.** Stage 3's loop flip is the largest single improvement (29–35× on both machines). Stage 4's dynamic tiling helps on the i5 (small L3) but hurts on the CI runner (large L3). Stage 5's hand-written 4-wide SIMD is **slower** than the compiler's auto-vectorized 8-wide AVX2 — a lesson in not underestimating the auto-vectorizer when your block sizes are correct.
 
 ---
 
@@ -323,4 +324,4 @@ This benchmark demonstrates that:
 ---
 *Built on an i5-6300U in Juja, Kenya. Validated on an M3 MacBook. The hardware was different. The physics was identical.*
 
-*Best result: 135ms on the i5 for 2.1 billion FLOPs — a 77× improvement from the naive baseline, achieved through five incremental, documented, reproducible steps.*
+*Best result: 208ms (C++ Stage 4) on the i5 — a 40× improvement from the naive baseline, achieved through four documented steps. The journey continues.*

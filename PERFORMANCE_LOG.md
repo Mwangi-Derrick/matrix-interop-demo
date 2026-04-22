@@ -547,46 +547,48 @@ Tiling's overhead (6 nested loops, min() calls, more complex pointer arithmetic)
 
 ---
 
-## Complete Summary — All Stages, Both Machines
+## Complete Summary — All Stages, All Machines
 
-### Intel Core i5-6300U (x86_64-windows-gnu)
+> **Methodology**: Results below are from `run_benchmark_stages.sh`, which runs all stages sequentially on the same machine. Each stage uses its immutable stage-matched kernels with dynamically calculated block sizes. Numbers are median of 5 timed runs after warmup.
+
+### Intel Core i5-6300U — Local (3 MB L3, block sizes: L1=48, L2=144, L3=496)
 
 | Stage | Algorithm | Zig | Rust | C++ |
 |:---|:---|:---:|:---:|:---:|
-| 1 | Naive (i,j,k) — default flags | 10,414ms | 12,826ms | 12,820ms |
-| 2 | Naive (i,j,k) — normalized flags | 13,466ms | 12,685ms | 10,671ms |
-| 3 | Optimized (i,k,j) — normalized flags | 865ms | 785ms | 419ms |
-| 4 | Tiled 64×64 (i,k,j) — normalized flags | 1,367ms | 647ms | 401ms |
-| **5** | **Hierarchical funnel + SIMD µ-kernel** | **135ms** | **135ms** | **152ms** |
+| 1 | Naive (i,j,k) — default flags | 7,911ms | 7,986ms | 8,454ms |
+| 2 | Naive (i,j,k) — normalized flags | 8,943ms | 8,650ms | 9,498ms |
+| 3 | Optimized (i,k,j) — normalized flags | 273ms | 245ms | **232ms** |
+| 4 | Tiled l1_block×l1_block (i,k,j) — normalized flags | 226ms | 218ms | **208ms** |
+| 5 | Hierarchical funnel + 4×4 SIMD µ-kernel | 274ms | 380ms | 317ms |
 
-**Best result per language (i5)**:
-- Zig: **135ms** (Stage 5 — **77× from Stage 1**)
-- Rust: **135ms** (Stage 5 — **95× from Stage 1**)
-- C++: **152ms** (Stage 5 — **84× from Stage 1**)
+### GitHub Actions CI Runner (32 MB L3, block sizes: L1=48, L2=200, L3=1624)
 
-**All three languages within 12% of each other.** The performance gap that existed from Stages 1–4 has collapsed.
+| Stage | Algorithm | Zig | Rust | C++ |
+|:---|:---|:---:|:---:|:---:|
+| 1 | Naive (i,j,k) — default flags | 7,353ms | 5,346ms | 7,464ms |
+| 2 | Naive (i,j,k) — normalized flags | 7,915ms | 5,561ms | 8,049ms |
+| 3 | Optimized (i,k,j) — normalized flags | **62ms** | **62ms** | **70ms** |
+| 4 | Tiled l1_block×l1_block (i,k,j) — normalized flags | 171ms | 166ms | 172ms |
+| 5 | Hierarchical funnel + 4×4 SIMD µ-kernel | 198ms | 212ms | 217ms |
 
-### Apple M3 (aarch64-apple-darwin)
+### Apple M3 (aarch64-apple-darwin) — Historical, hardcoded BLOCK_SIZE=64
 
 | Stage | Algorithm | Zig | Rust | C++ |
 |:---|:---|:---:|:---:|:---:|
 | 1 | Naive (i,j,k) — default flags | 1,020ms | 1,081ms | 1,284ms |
 | 2 | Naive (i,j,k) — normalized flags | 1,026ms | 1,084ms | 1,263ms |
-| 3 | Optimized (i,k,j) — normalized flags | 89ms | 83ms | 83ms |
+| 3 | Optimized (i,k,j) — normalized flags | **89ms** | **83ms** | **83ms** |
 | 4 | Tiled 64×64 — normalized flags | 144ms | 126ms | 119ms |
-| **5** | **Hierarchical funnel + SIMD µ-kernel** | *pending* | *pending* | *pending* |
 
-*Stage 5 results on M3 are pending cross-platform validation.*
+*M3 Stage 5 results are pending.*
 
-### Cross-Architecture Speedup Ratios (Stage 1 → Stage 5, i5-6300U)
+### Key Observations
 
-| Language | Stage 1→3 ratio | Stage 1→5 ratio | Stage 4→5 ratio |
-|:---|:---:|:---:|:---:|
-| Zig | 12.0× | **77×** | **10.1×** |
-| Rust | 16.3× | **95×** | **4.8×** |
-| C++ | 30.6× | **84×** | **2.6×** |
+**Stage 4 improved dramatically.** The old PERFORMANCE_LOG reported Zig at 1,367ms with a hardcoded `BLOCK_SIZE=64`. That block size overflows L1 (64²×3×4 = 49KB > 32KB L1), causing cache thrashing. The dynamic `l1_block=48` (48²×3×4 = 27KB < 32KB) fits perfectly. Result: Zig Stage 4 dropped from 1,367ms → 226ms. **The "Stage 4 regression" was a misconfigured block size, not an auto-vectorization failure.**
 
-Stage 5's impact is most dramatic for Zig — the language that suffered the worst Stage 4 regression (+58%) now achieves the best absolute time. This confirms the thesis: **explicit SIMD eliminates the auto-vectorizer as a variable.**
+**Stage 5 is slower than Stage 4.** The 4×4 micro-kernel uses `@Vector(4, f32)` (128-bit SSE). But the i5-6300U supports AVX2 (256-bit, 8 floats at a time). The auto-vectorizer in Stages 3-4 generates **8-wide** code for free. Stage 5's hand-written **4-wide** SIMD has half the throughput, plus the overhead of hierarchical (12-nested) loop structure. On the CI runner (32MB L3), tiling adds pure overhead since the entire working set already fits in cache.
+
+**The honest conclusion**: explicit SIMD only helps when it matches or exceeds the auto-vectorizer's width. A `@Vector(4, f32)` micro-kernel on AVX2 hardware is a **pessimization**. The correct fix is widening to `@Vector(8, f32)` — this is the next optimization target.
 
 ---
 
