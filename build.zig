@@ -66,6 +66,19 @@ pub fn build(b: *std.Build) void {
         bench.linkSystemLibrary("shell32");
     }
 
+    // macOS frameworks required by Rust's std
+    if (target.result.os.tag == .macos) {
+        bench.linkFramework("Security");
+        bench.linkFramework("SystemConfiguration");
+    }
+
+    // Linux: pthread required by Rust's std
+    if (target.result.os.tag == .linux) {
+        bench.linkSystemLibrary("pthread");
+        bench.linkSystemLibrary("dl");
+        bench.linkSystemLibrary("m");
+    }
+
     bench.linkLibC();
     b.installArtifact(bench);
 
