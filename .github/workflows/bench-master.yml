@@ -4,7 +4,18 @@ on:
   push:
     branches:
       - master
-
+    paths-ignore:
+      # Documentation files
+      - '**.md'
+      - 'docs/**'
+      - '**/docs/**'
+      - 'README.md'
+      - 'CHANGELOG.md'
+      - 'CONTRIBUTING.md'
+      
+      # Config files that don't affect code
+      - '.gitignore'
+      - 'Justfile'
 permissions:
   contents: read
 
