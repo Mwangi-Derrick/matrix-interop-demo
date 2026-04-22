@@ -84,18 +84,6 @@ add_worktree() {
     printf '%s\n' "$dir"
 }
 
-patch_stage1_build() {
-    local dir="$1"
-
-    sed -i.bak \
-        -e "s|x86_64-apple-darwin|${RUST_TARGET}|g" \
-        -e "s|x86_64-unknown-linux-gnu|${RUST_TARGET}|g" \
-        -e "s|bench.linkSystemLibrary(\"stdc++\");|bench.linkSystemLibrary(\"${CXX_RUNTIME}\");|" \
-        "$dir/build.zig"
-
-    rm -f "$dir/build.zig.bak"
-}
-
 prepare_modern_build() {
     local dir="$1"
     cp "$ROOT_DIR/build.zig" "$dir/build.zig"
@@ -188,6 +176,18 @@ run_zig() {
     )
 }
 
+# Thermal cooldown between stages.
+# On low-TDP CPUs (e.g. 15W i5-6300U), sustained heavy compute causes thermal
+# throttling, which can degrade results by 2× or more. A brief pause lets the
+# CPU return to boost clocks. Skip on CI (detected via $CI).
+thermal_cooldown() {
+    if [[ "${CI:-}" == "true" ]]; then
+        return  # CI runners have active cooling; skip
+    fi
+    printf 'Cooling down (5s)...\n'
+    sleep 5
+}
+
 run_stage() {
     local label="$1"
     local commit="$2"
@@ -200,7 +200,6 @@ run_stage() {
 
     # Always use the modern build.zig — it handles all targets via
     # rustTargetTriple() and registers the cache_info module needed by bench.zig.
-    # The old patch_stage1_build is no longer needed.
     prepare_modern_build "$dir"
 
     # Copy all stage-matched kernels (immutable snapshots)
@@ -239,9 +238,13 @@ main() {
     rustup target add "$RUST_TARGET"
 
     run_stage stage1 f81426b "" -Doptimize=ReleaseFast
+    thermal_cooldown
     run_stage stage2 906609d "-C target-cpu=native" -Doptimize=ReleaseFast -Dtarget=native
+    thermal_cooldown
     run_stage stage3 c7c6d4c "-C target-cpu=native" -Doptimize=ReleaseFast -Dtarget=native
+    thermal_cooldown
     run_stage stage4 32f7d90 "-C target-cpu=native" -Doptimize=ReleaseFast -Dtarget=native
+    thermal_cooldown
     run_current
 }
 
