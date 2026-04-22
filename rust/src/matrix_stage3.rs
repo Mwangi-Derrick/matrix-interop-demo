@@ -3,7 +3,6 @@
 // Moving j to the innermost loop makes both B and Result accesses sequential.
 // On i5-6300U: 12,685ms → 785ms (16× speedup). On M3: 1,084ms → 83ms (13× speedup).
 
-use std::cmp::min;
 
 #[no_mangle]
 pub unsafe extern "C" fn rust_matrix_multiply(
