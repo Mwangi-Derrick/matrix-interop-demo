@@ -48,10 +48,28 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Add Rust target (platform-specific)
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$(uname -s):$(uname -m)" in
+            Darwin:arm64|Darwin:aarch64) rustup target add aarch64-apple-darwin ;;
+            Darwin:x86_64)               rustup target add x86_64-apple-darwin ;;
+            Linux:aarch64|Linux:arm64)   rustup target add aarch64-unknown-linux-gnu ;;
+            Linux:x86_64)                rustup target add x86_64-unknown-linux-gnu ;;
+            MINGW*:x86_64|MSYS*:x86_64)  rustup target add x86_64-pc-windows-gnu ;;
+          esac
+
       - name: Set up Zig
         uses: goto-bus-stop/setup-zig@v2
         with:
           version: ${{ env.ZIG_VERSION }}
+
+      - name: Install system dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y build-essential
 
       - name: Show toolchain versions
         shell: bash
@@ -80,6 +98,8 @@ jobs:
 
       - name: Run stage benchmarks
         shell: bash
+        env:
+          CI: "true"
         run: |
           set -euo pipefail
           bash ./run_benchmark_stages.sh 2>&1 | tee ci-results/benchmark.log
