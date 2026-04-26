@@ -1,21 +1,50 @@
+# yaml-language-server: $schema=https://json.schemastore.org/github-workflow.json
 name: Benchmark Matrix
 
 on:
   push:
     branches:
       - master
-    paths-ignore:
-      # Documentation files
-      - '**.md'
-      - 'docs/**'
-      - '**/docs/**'
-      - 'README.md'
-      - 'CHANGELOG.md'
-      - 'CONTRIBUTING.md'
-      
-      # Config files that don't affect code
-      - '.gitignore'
+    paths:
+      # Only trigger on code changes that affect performance
+      - '**.zig'
+      - '**.rs'
+      - '**.cpp'
+      - '**.h'
+      - '**.hpp'
+      - 'build.zig'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'run_benchmark_stages.sh'
+      - '.github/workflows/bench-master.yml'
       - 'Justfile'
+      - 'bench/**'
+    # Remove paths-ignore or restructure - GitHub doesn't allow both paths and paths-ignore
+    # Use negative patterns in paths instead:
+    # paths:
+    #   - '**.zig'
+    #   - '**.rs'
+    #   - '!**.md'  # Exclude markdown files
+    #   - '!docs/**'
+
+  pull_request:
+    branches:
+      - master
+    paths:
+      - '**.zig'
+      - '**.rs'
+      - '**.cpp'
+      - '**.h'
+      - '**.hpp'
+      - 'build.zig'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'run_benchmark_stages.sh'
+      - '.github/workflows/bench-master.yml'
+      - 'Justfile'
+      - 'bench/**'
+      - '**.md'
+
 permissions:
   contents: read
 
