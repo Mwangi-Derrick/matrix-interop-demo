@@ -95,8 +95,26 @@ On Linux ARM64 (Graviton), Rust Stage 5 is **373ms** vs Zig 123ms and C++ 117ms 
 ---
 
 ## Automated Stage Runner
-
 `run_benchmark_stages.sh` uses `git worktree` + immutable stage-matched kernels (`zig/matrix_stage{1..5}.zig`, `cpp/matrix_stage{1..5}.cpp`, `rust/src/matrix_stage{1..5}.rs`) to reproduce every number in this document. Thermal cooldown between stages on local machines prevents throttling bias.
+---
+
+## 📚 Documentation
+
+- **[DEEP_DIVE.md](DEEP_DIVE.md)** — Systems engineering masterclass on memory hierarchies and compiler optimization
+- **[PERFORMANCE_LOG.md](PERFORMANCE_LOG.md)** — Detailed benchmark results and analysis across all architectures
+- **[CONTRIBUTING.md](CONTRIBUTING.md)** — How to contribute to this performance investigation
+- **[CHANGELOG.md](CHANGELOG.md)** — Version history and notable changes
+
+## 🤝 Community
+
+- **Discussions:** [GitHub Discussions](https://github.com/Mwangi-Derrick/matrix-interop-demo/discussions) for questions and ideas
+- **Issues:** [GitHub Issues](https://github.com/Mwangi-Derrick/matrix-interop-demo/issues) for bugs and feature requests
+- **Code of Conduct:** See [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
+- **Security:** Report vulnerabilities via [SECURITY.md](SECURITY.md)
+
+## 📄 License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 ```bash
 git clone https://github.com/Mwangi-Derrick/matrix-interop-demo
