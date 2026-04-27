@@ -34,6 +34,32 @@ const SYSTEM_LOGICAL_PROCESSOR_INFORMATION = extern struct {
     },
 };
 
+///The string like "kernel32" names the specific dynamic library (.dll on Windows, .so on Linux) the linker should search in to find the function to call.
+/// 
+/// Windows ships with hundreds of dynamic linked libraries (DLLs) as part of the OS.
+/// The Core Windows DLLs You'll Encounter
+    // kernel32.dll - Core system functions (memory, processes, threads, the function you're using)
+
+    // user32.dll - Window management, UI elements, message passing
+
+    // gdi32.dll - Graphics drawing (lines, shapes, text)
+
+    // ntdll.dll - Low-level NT kernel interface (most functions end up here)
+
+    // advapi32.dll - Security, registry, event logging
+
+    // Every Windows machine from Windows 95 to Windows 11 ships with these DLLs in C:\Windows\System32\. They're the actual implementation of the Win32 API.
+
+    // What This Means for Your Zig Code
+    // When you write:
+
+    // zig
+    // extern "kernel32" fn GetLogicalProcessorInformation(...);
+    // You're telling the Zig linker: "Insert a stub that jumps into kernel32.dll at runtime." That's it. No static linking, no copying the function's code into your .exe. Just a reference that Windows will resolve when your program loads.
+/// 
+/// 
+
+
 extern "kernel32" fn GetLogicalProcessorInformation(
     Buffer: ?[*]SYSTEM_LOGICAL_PROCESSOR_INFORMATION,
     ReturnedLength: *win32.DWORD,
